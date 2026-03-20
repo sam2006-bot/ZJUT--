@@ -1,0 +1,354 @@
+:root {
+  --bg: #f4efe6;
+  --paper: rgba(255, 252, 246, 0.92);
+  --paper-strong: #fffaf0;
+  --line: rgba(55, 45, 30, 0.14);
+  --text: #23180d;
+  --muted: #6e5a43;
+  --accent: #a63d1a;
+  --accent-soft: #f2c7a7;
+  --shadow: 0 24px 60px rgba(66, 33, 12, 0.12);
+  --radius: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(255, 214, 175, 0.7), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(227, 120, 76, 0.22), transparent 30%),
+    linear-gradient(135deg, #efe3d0 0%, #f7f3eb 45%, #e7d6bc 100%);
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 440px) minmax(420px, 1fr);
+  gap: 24px;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.panel-form {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+}
+
+.panel-header h1,
+.panel-header h2,
+.panel-copy,
+.eyebrow {
+  margin: 0;
+}
+
+.panel-header h1,
+.panel-header h2 {
+  font-size: clamp(2rem, 2vw + 1.2rem, 3rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.eyebrow {
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.panel-copy {
+  margin-top: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.grader-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.advanced-options {
+  border: 1px solid rgba(70, 52, 33, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 249, 241, 0.92);
+  padding: 14px 16px;
+}
+
+.advanced-options[open] {
+  background: rgba(255, 247, 237, 0.98);
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.advanced-options summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-options summary::after {
+  content: "+";
+  float: right;
+  color: var(--accent);
+  font-size: 1.1rem;
+}
+
+.advanced-options[open] summary::after {
+  content: "-";
+}
+
+.advanced-copy {
+  margin: 12px 0 14px;
+  color: var(--muted);
+  line-height: 1.65;
+  font-size: 0.93rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.96rem;
+}
+
+.field span {
+  font-weight: 700;
+}
+
+input[type="text"],
+select,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(70, 52, 33, 0.18);
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: rgba(255, 252, 246, 0.95);
+  color: var(--text);
+  font: inherit;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+input[type="text"]:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: rgba(166, 61, 26, 0.7);
+  box-shadow: 0 0 0 4px rgba(166, 61, 26, 0.12);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 110px;
+}
+
+.upload-card {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  border: 1.5px dashed rgba(166, 61, 26, 0.38);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 241, 229, 0.95), rgba(255, 251, 245, 0.95));
+  cursor: pointer;
+}
+
+.upload-card input {
+  display: none;
+}
+
+.upload-label {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.upload-name {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 15px 22px;
+  background: linear-gradient(135deg, #8e2e12, #bc5124);
+  color: #fffaf2;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+  box-shadow: 0 16px 28px rgba(150, 66, 28, 0.26);
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.66;
+  cursor: wait;
+}
+
+.status {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(242, 199, 167, 0.32);
+  color: #68351a;
+  font-size: 0.95rem;
+}
+
+.result-card {
+  min-height: 520px;
+  padding: 24px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 252, 246, 0.96), rgba(248, 240, 230, 0.98)),
+    repeating-linear-gradient(
+      180deg,
+      rgba(189, 151, 113, 0.05),
+      rgba(189, 151, 113, 0.05) 31px,
+      transparent 31px,
+      transparent 32px
+    );
+  border: 1px solid rgba(82, 56, 32, 0.12);
+  overflow-wrap: anywhere;
+  line-height: 1.75;
+}
+
+.result-card h1,
+.result-card h2,
+.result-card h3 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.25;
+}
+
+.result-card h1 {
+  font-size: 1.6rem;
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 0.4em;
+}
+
+.result-card h2 {
+  font-size: 1.25rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.3em;
+}
+
+.result-card h3 {
+  font-size: 1.05rem;
+}
+
+.result-card p {
+  margin: 0.6em 0;
+}
+
+.result-card ul,
+.result-card ol {
+  margin: 0.5em 0;
+  padding-left: 1.6em;
+}
+
+.result-card li {
+  margin: 0.3em 0;
+}
+
+.result-card strong {
+  color: var(--accent);
+}
+
+.result-card code {
+  background: rgba(166, 61, 26, 0.08);
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  font-size: 0.9em;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
+.result-card pre {
+  background: rgba(35, 24, 13, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+.result-card pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.result-card table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+}
+
+.result-card th,
+.result-card td {
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.result-card th {
+  background: rgba(166, 61, 26, 0.06);
+  font-weight: 700;
+}
+
+.result-card hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1.2em 0;
+}
+
+.result-card blockquote {
+  margin: 0.8em 0;
+  padding: 0.5em 1em;
+  border-left: 3px solid var(--accent);
+  background: rgba(166, 61, 26, 0.04);
+  color: var(--muted);
+}
+
+.placeholder {
+  margin: 0;
+  color: var(--muted);
+}
+
+.result-card.is-loading {
+  opacity: 0.75;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-form {
+    position: static;
+  }
+
+  .result-card {
+    min-height: 360px;
+  }
+}

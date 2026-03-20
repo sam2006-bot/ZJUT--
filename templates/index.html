@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude 代码批改器</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+  <main class="app-shell">
+    <section class="panel panel-form">
+      <div class="panel-header">
+        <p class="eyebrow">Student Code Grader</p>
+        <h1>上传代码并交给 Claude 批改</h1>
+        <p class="panel-copy">
+          左侧填写作业背景并上传代码，右侧会展示结构化批改结果。
+        </p>
+      </div>
+
+      <form id="grader-form" class="grader-form">
+        <label class="field">
+          <span>批改模式</span>
+          <select name="mode">
+            <option value="Teacher">Teacher</option>
+            <option value="Student">Student</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>作业标题</span>
+          <input type="text" name="assignment_title" placeholder="例如：Python 期中编程作业" />
+        </label>
+
+        <label class="field">
+          <span>作业要求</span>
+          <textarea name="assignment_requirements" rows="5" placeholder="例如：实现一个学生成绩管理程序，支持录入、查询、排序..."></textarea>
+        </label>
+
+        <label class="field">
+          <span>任务目标</span>
+          <textarea name="task_goal" rows="3" placeholder="例如：重点检查功能是否完整、逻辑是否正确"></textarea>
+        </label>
+
+        <label class="field">
+          <span>编程语言</span>
+          <input type="text" name="programming_language" placeholder="例如：Python / C++ / Java" />
+        </label>
+
+        <details class="advanced-options">
+          <summary>高级选项</summary>
+          <p class="advanced-copy">
+            会使用我们默认的评分标准。
+            只有在你想临时覆盖默认评分规则时，才需要填写下面这一项。
+          </p>
+
+          <label class="field">
+            <span>自定义评分细则（可选）</span>
+            <textarea name="rubric" rows="4" placeholder="例如：功能 60 分，可读性 20 分，鲁棒性 20 分"></textarea>
+          </label>
+        </details>
+
+        <label class="upload-card" for="student_code">
+          <input id="student_code" name="student_code" type="file" required />
+          <span class="upload-label">上传学生代码文件</span>
+          <span id="file-name" class="upload-name">尚未选择文件</span>
+        </label>
+
+        <button id="submit-button" type="submit">开始批改</button>
+      </form>
+    </section>
+
+    <section class="panel panel-result">
+      <div class="panel-header">
+        <p class="eyebrow">Claude Review</p>
+        <h2>批改结果</h2>
+        <p class="panel-copy">提交后，Claude 的批改内容会显示在这里。</p>
+      </div>
+
+      <div id="status" class="status">等待上传代码文件。</div>
+      <article id="result" class="result-card">
+        <p class="placeholder">
+          建议先填写作业要求，这样 Claude 的评分会更稳定，也更接近我们给AI设定的评审逻辑。
+        </p>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
