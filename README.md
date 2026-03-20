@@ -1,65 +1,105 @@
 # Claude Student Code Grader
 
-一个最小本地 Web 应用：
+一个基于 Claude AI 的学生代码自动评分 Web 应用。教师可以设定作业要求，学生提交代码后由 Claude 进行智能评审并给出结构化的评分与反馈。
 
-- 左侧上传学生代码并填写作业背景
-- 后端读取你写的 `.claude/skills/student-code-grader/SKILL.md`
-- 调用 Claude 进行批改
-- 右侧展示批改结果
+## 功能特性
 
-## 你需要填写的地方
+- **智能代码评审** — 调用 Anthropic Claude API，从任务完成度、正确性、可读性、风格等多个维度评分（满分 100）
+- **双模式反馈** — 支持教师模式（专业决策导向）和学生模式（建设性学习导向）
+- **自定义评分标准** — 可使用默认评分维度，也可由教师自定义 Rubric
+- **邀请码访问控制** — 可选的邀请码认证机制，基于 HMAC-SHA256 签名的会话管理
+- **零外部依赖** — 纯 Python 标准库实现后端，无需安装第三方包
+- **一键部署** — 提供 Render.com 部署配置，开箱即用
 
-项目里已经留了空位，请自己填写：
+## 技术栈
 
-1. 复制 `.env.example` 为 `.env`
-2. 在 `.env` 中填入：
+| 层级 | 技术 |
+|------|------|
+| 后端 | Python 3 标准库（`http.server`、`urllib`、`hmac`） |
+| 前端 | HTML5 + CSS3 + Vanilla JS（Markdown 渲染使用 marked.js CDN） |
+| AI   | Anthropic Claude API |
+| 部署 | Render.com（Free Tier） |
 
-```env
-ANTHROPIC_API_KEY=你的_claude_api_key
-ANTHROPIC_MODEL=你要使用的_claude_模型名
-APP_HOST=0.0.0.0
-INVITE_CODES=你的邀请码1,你的邀请码2
-INVITE_SESSION_SECRET=一段足够长的随机字符串
+## 项目结构
+
+```
+├── app.py              # 主服务端程序（路由、API 调用、认证）
+├── render.yaml         # Render.com 部署配置
+├── .env.example        # 环境变量模板
+├── static/
+│   ├── app.js          # 前端表单交互与结果渲染
+│   └── styles.css      # 页面样式
+└── templates/
+    ├── index.html      # 评分主界面
+    └── login.html      # 邀请码登录页
 ```
 
-## 启动方式
+## 快速开始
+
+### 前置条件
+
+- Python 3（无需安装额外依赖）
+- Anthropic API Key
+
+### 本地运行
 
 ```bash
+# 1. 克隆项目
+git clone <repo-url> && cd competition
+
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入你的 API Key 和模型名称：
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# 3. 启动服务
 python3 app.py
 ```
 
-浏览器打开：
+服务启动后访问 `http://localhost:8000` 即可使用。
 
-```text
-http://127.0.0.1:8000
-```
+### 部署到 Render
 
-如果你修改了 `APP_PORT`，则按你设置的端口访问。
+1. 将项目推送到 GitHub
+2. 在 Render Dashboard 创建 Web Service 并关联仓库
+3. 在 Environment 中配置 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_MODEL`
+4. Render 会根据 `render.yaml` 自动部署
 
-## Render 部署
+## 环境变量
 
-仓库已经包含 `render.yaml`，可以直接按 Blueprint 方式部署：
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `ANTHROPIC_API_KEY` | 是 | Anthropic API 密钥 |
+| `ANTHROPIC_MODEL` | 是 | 使用的 Claude 模型（如 `claude-sonnet-4-6`） |
+| `INVITE_CODES` | 否 | 邀请码列表，逗号或换行分隔；留空则无需登录 |
+| `INVITE_SESSION_SECRET` | 否 | 会话签名密钥（设置邀请码时必填） |
+| `APP_HOST` | 否 | 监听地址，默认 `0.0.0.0` |
+| `APP_PORT` | 否 | 监听端口，默认 `8000` |
 
-1. 把项目推到 GitHub
-2. 登录 Render
-3. 选择 `New` -> `Blueprint`
-4. 选择这个仓库
-5. 按提示填写 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_MODEL`
-6. 点击创建并等待首次部署完成
+## 评分维度（默认）
 
-部署成功后，Render 会给你一个公网地址。
+| 维度 | 分值 |
+|------|------|
+| 任务完成度 | 30 |
+| 正确性 | 30 |
+| 完整性 | 10 |
+| 可读性 | 10 |
+| 代码风格 | 10 |
+| 健壮性 | 5 |
+| 注释 | 5 |
+| **总分** | **100** |
 
-如果你想限制只有收到邀请码的人才能访问，还需要在 Render 环境变量中设置：
+## API 路由
 
-```env
-INVITE_CODES=your-code-1,your-code-2
-INVITE_SESSION_SECRET=your-long-random-secret
-```
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/` | 评分主页面 |
+| POST | `/grade` | 提交代码进行评分（返回 JSON） |
+| POST | `/login` | 邀请码登录 |
+| GET | `/logout` | 注销并清除会话 |
+| GET | `/healthz` | 健康检查 |
 
-## 说明
+## 许可证
 
-- 后端没有依赖第三方库，直接使用 Python 标准库。
-- 默认只接受 1MB 以内的代码文件。
-- 如果没有填写作业要求，程序仍然会请求 Claude，但评分会更依赖模型推断。
-- 已兼容云端环境，会优先读取平台提供的 `PORT`。
-- 当配置了 `INVITE_CODES` 后，未输入正确邀请码的用户将无法访问首页和批改接口。
+MIT
