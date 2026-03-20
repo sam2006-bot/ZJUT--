@@ -42,6 +42,8 @@ cp .env.example .env
 ```env
 ANTHROPIC_API_KEY=sk-ant-xxxxx    # 你的 Claude API Key
 ANTHROPIC_MODEL=你的模型名称         # 使用的模型名称
+INVITE_CODES=code-1,code-2        # 可选，逗号分隔的邀请码
+INVITE_SESSION_SECRET=随机长字符串  # 配置邀请码后必须同时设置
 APP_HOST=0.0.0.0                   # 可选，默认 0.0.0.0
 APP_PORT=8000                      # 可选，默认 8000
 ```
@@ -93,6 +95,7 @@ python3 app.py
 - 评分基于静态代码审查，不会实际运行学生代码
 - 填写作业要求能显著提高评分的准确性和一致性
 - 需要可用的网络连接以访问 Claude API
+- 如果配置了 `INVITE_CODES`，用户必须先输入正确的邀请码才能进入系统
 
 ## 部署到 Render 免费版
 
@@ -133,6 +136,8 @@ git push -u origin main
 6. 在创建页面填写环境变量：
    - `ANTHROPIC_API_KEY`
    - `ANTHROPIC_MODEL`
+   - `INVITE_CODES`（如果要开启邀请码访问）
+   - `INVITE_SESSION_SECRET`（如果填写了 `INVITE_CODES`，这一项必填）
 7. 确认实例类型是 `free`
 8. 点击创建
 
@@ -168,3 +173,9 @@ https://your-service-name.onrender.com/healthz
 - 再次访问时会有冷启动，通常会慢一些
 - 适合演示、小范围使用、轻量工具
 - 不适合高并发或严格实时响应场景
+
+## 邀请码访问建议
+
+- `INVITE_CODES` 支持多个邀请码，使用英文逗号分隔
+- `INVITE_SESSION_SECRET` 建议使用至少 32 位的随机字符串
+- 修改邀请码或密钥后，旧登录状态会失效，用户需要重新输入邀请码

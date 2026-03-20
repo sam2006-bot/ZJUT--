@@ -12,3 +12,7 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         sync: false
+      - key: INVITE_CODES
+        sync: false
+      - key: INVITE_SESSION_SECRET
+        sync: false

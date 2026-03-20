@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>邀请码访问 | Claude 代码批改器</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body class="invite-page">
+  <main class="invite-shell">
+    <section class="invite-card">
+      <p class="eyebrow">Invite Access</p>
+      <h1>请输入邀请码</h1>
+      <p class="panel-copy">
+        这个批改器只对收到邀请码的人开放。输入正确的邀请码后，才能进入批改页面。
+      </p>
+
+      __ERROR_BLOCK__
+
+      <form method="POST" action="/login" class="invite-form">
+        <label class="field">
+          <span>邀请码</span>
+          <input type="text" name="invite_code" placeholder="请输入邀请码" autocomplete="one-time-code" required />
+        </label>
+
+        <button type="submit">进入批改器</button>
+      </form>
+    </section>
+  </main>
+</body>
+
+</html>

@@ -1,25 +1,33 @@
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
+import hashlib
+import hmac
+import html
 import json
 import mimetypes
 import os
 import sys
 import urllib.error
 import urllib.request
+import urllib.parse
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 TEMPLATES_DIR = ROOT / "templates"
 SKILL_PATH = ROOT / ".claude" / "skills" / "student-code-grader" / "SKILL.md"
+LOGIN_TEMPLATE_PATH = TEMPLATES_DIR / "login.html"
 ENV_PATH = ROOT / ".env"
 MAX_UPLOAD_BYTES = 1024 * 1024
 MAX_FORM_BYTES = MAX_UPLOAD_BYTES + 256 * 1024
+SESSION_COOKIE_NAME = "invite_session"
+SESSION_MAX_AGE = 60 * 60 * 24 * 30
 
 
 @dataclass
@@ -100,6 +108,83 @@ def extract_text_from_claude_response(payload: Dict) -> str:
         if block.get("type") == "text":
             texts.append(block.get("text", ""))
     return "\n".join(part for part in texts if part).strip()
+
+
+def get_invite_codes() -> list[str]:
+    raw_values = [os.getenv("INVITE_CODES", ""), os.getenv("INVITE_CODE", "")]
+    codes = []
+    for raw_value in raw_values:
+        for chunk in raw_value.replace("\n", ",").split(","):
+            code = chunk.strip()
+            if code:
+                codes.append(code)
+    return codes
+
+
+def auth_enabled() -> bool:
+    return bool(get_invite_codes())
+
+
+def get_session_secret() -> str:
+    return os.getenv("INVITE_SESSION_SECRET", "").strip()
+
+
+def validate_auth_configuration() -> None:
+    if auth_enabled() and not get_session_secret():
+        raise RuntimeError("配置了 INVITE_CODES 后，必须同时配置 INVITE_SESSION_SECRET。")
+
+
+def hash_invite_code(invite_code: str) -> str:
+    return hashlib.sha256(invite_code.encode("utf-8")).hexdigest()
+
+
+def sign_value(value: str) -> str:
+    secret = get_session_secret().encode("utf-8")
+    return hmac.new(secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_session_token(invite_code: str) -> str:
+    digest = hash_invite_code(invite_code)
+    return f"{digest}.{sign_value(digest)}"
+
+
+def is_valid_invite_code(invite_code: str) -> bool:
+    for allowed_code in get_invite_codes():
+        if hmac.compare_digest(invite_code, allowed_code):
+            return True
+    return False
+
+
+def is_valid_session_token(token: str) -> bool:
+    if not token or "." not in token:
+        return False
+
+    digest, signature = token.split(".", 1)
+    if not digest or not signature:
+        return False
+    if not hmac.compare_digest(signature, sign_value(digest)):
+        return False
+
+    allowed_digests = {hash_invite_code(code) for code in get_invite_codes()}
+    return digest in allowed_digests
+
+
+def parse_urlencoded_form(headers, rfile) -> Dict[str, str]:
+    content_type = headers.get("Content-Type", "")
+    if "application/x-www-form-urlencoded" not in content_type:
+        raise ValueError("请求格式错误，请使用邀请码表单登录。")
+
+    try:
+        content_length = int(headers.get("Content-Length", ""))
+    except ValueError as error:
+        raise ValueError("请求缺少有效的 Content-Length。") from error
+
+    if content_length <= 0 or content_length > 8192:
+        raise ValueError("邀请码请求无效。")
+
+    body = rfile.read(content_length).decode("utf-8", errors="replace")
+    parsed = urllib.parse.parse_qs(body, keep_blank_values=True)
+    return {key: values[0] for key, values in parsed.items()}
 
 
 def parse_multipart_form(headers, rfile) -> MultipartForm:
@@ -210,7 +295,14 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.OK, {"ok": True, "status": "healthy"}, send_body=send_body)
             return
 
+        if self.path == "/logout":
+            self.clear_session_and_redirect("/")
+            return
+
         if self.path == "/":
+            if not self.is_authenticated():
+                self.serve_login_page(send_body=send_body)
+                return
             self.serve_file(
                 TEMPLATES_DIR / "index.html",
                 "text/html; charset=utf-8",
@@ -227,8 +319,16 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
     def do_POST(self) -> None:
+        if self.path == "/login":
+            self.handle_login_request()
+            return
+
         if self.path != "/grade":
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+            return
+
+        if not self.is_authenticated():
+            self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "请先输入邀请码。"})
             return
 
         try:
@@ -278,8 +378,105 @@ class AppHandler(BaseHTTPRequestHandler):
         user_prompt = build_user_prompt(fields, upload.filename, code_text)
         return call_claude(system_prompt, user_prompt)
 
+    def handle_login_request(self) -> None:
+        if not auth_enabled():
+            self.redirect("/")
+            return
+
+        try:
+            fields = parse_urlencoded_form(self.headers, self.rfile)
+        except ValueError as error:
+            self.serve_login_page(str(error), status=HTTPStatus.BAD_REQUEST)
+            return
+
+        invite_code = fields.get("invite_code", "").strip()
+        if not invite_code:
+            self.serve_login_page("请输入邀请码。", status=HTTPStatus.BAD_REQUEST)
+            return
+
+        if not is_valid_invite_code(invite_code):
+            self.serve_login_page("邀请码无效，请重试。", status=HTTPStatus.UNAUTHORIZED)
+            return
+
+        token = create_session_token(invite_code)
+        self.redirect("/", extra_headers={"Set-Cookie": self.build_session_cookie(token)})
+
     def _get_field_value(self, fields: Dict[str, str], name: str, default: str = "") -> str:
         return str(fields.get(name, default))
+
+    def is_authenticated(self) -> bool:
+        if not auth_enabled():
+            return True
+        return is_valid_session_token(self.get_cookie_value(SESSION_COOKIE_NAME))
+
+    def get_cookie_value(self, cookie_name: str) -> str:
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return ""
+        cookie = SimpleCookie()
+        cookie.load(cookie_header)
+        morsel = cookie.get(cookie_name)
+        return morsel.value if morsel else ""
+
+    def is_secure_request(self) -> bool:
+        return self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+
+    def build_session_cookie(self, token: str) -> str:
+        parts = [
+            f"{SESSION_COOKIE_NAME}={token}",
+            "Path=/",
+            f"Max-Age={SESSION_MAX_AGE}",
+            "HttpOnly",
+            "SameSite=Lax",
+        ]
+        if self.is_secure_request():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def build_clear_cookie(self) -> str:
+        parts = [
+            f"{SESSION_COOKIE_NAME}=",
+            "Path=/",
+            "Max-Age=0",
+            "HttpOnly",
+            "SameSite=Lax",
+        ]
+        if self.is_secure_request():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def clear_session_and_redirect(self, location: str) -> None:
+        self.redirect(location, extra_headers={"Set-Cookie": self.build_clear_cookie()})
+
+    def redirect(self, location: str, extra_headers: Optional[Dict[str, str]] = None) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
+        self.end_headers()
+
+    def serve_login_page(
+        self,
+        error_message: str = "",
+        status: HTTPStatus = HTTPStatus.OK,
+        send_body: bool = True,
+    ) -> None:
+        template = LOGIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+        error_block = ""
+        if error_message:
+            error_block = (
+                '<div class="invite-error">'
+                f"{html.escape(error_message)}"
+                "</div>"
+            )
+        content = template.replace("__ERROR_BLOCK__", error_block).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        if send_body:
+            self.wfile.write(content)
 
     def serve_file(self, file_path: Path, content_type: str, send_body: bool = True) -> None:
         if not file_path.exists():
@@ -317,6 +514,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     load_dotenv(ENV_PATH)
+    validate_auth_configuration()
     host = os.getenv("APP_HOST", "0.0.0.0")
     port = int(os.getenv("PORT") or os.getenv("APP_PORT", "8000"))
     server = ThreadingHTTPServer((host, port), AppHandler)

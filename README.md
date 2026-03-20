@@ -18,6 +18,8 @@
 ANTHROPIC_API_KEY=你的_claude_api_key
 ANTHROPIC_MODEL=你要使用的_claude_模型名
 APP_HOST=0.0.0.0
+INVITE_CODES=你的邀请码1,你的邀请码2
+INVITE_SESSION_SECRET=一段足够长的随机字符串
 ```
 
 ## 启动方式
@@ -47,9 +49,17 @@ http://127.0.0.1:8000
 
 部署成功后，Render 会给你一个公网地址。
 
+如果你想限制只有收到邀请码的人才能访问，还需要在 Render 环境变量中设置：
+
+```env
+INVITE_CODES=your-code-1,your-code-2
+INVITE_SESSION_SECRET=your-long-random-secret
+```
+
 ## 说明
 
 - 后端没有依赖第三方库，直接使用 Python 标准库。
 - 默认只接受 1MB 以内的代码文件。
 - 如果没有填写作业要求，程序仍然会请求 Claude，但评分会更依赖模型推断。
 - 已兼容云端环境，会优先读取平台提供的 `PORT`。
+- 当配置了 `INVITE_CODES` 后，未输入正确邀请码的用户将无法访问首页和批改接口。
