@@ -121,8 +121,10 @@ CLAUDE_API_AUTH_PREFIX=
 
 ```env
 CLAUDE_API_AUTH_HEADER=Authorization
-CLAUDE_API_AUTH_PREFIX=Bearer 
+CLAUDE_API_AUTH_PREFIX=Bearer
 ```
+
+当 `CLAUDE_API_AUTH_HEADER=Authorization` 时，程序会自动在前缀和 key 之间补一个空格，所以你直接填 `Bearer` 就可以，不需要手动输入尾随空格。
 
 如果你的代理不是 Anthropic 协议，而是 OpenAI 风格的 `/v1/chat/completions`，当前项目还需要额外适配请求体和返回体，不能只靠改环境变量完成。
 

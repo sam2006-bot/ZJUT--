@@ -271,7 +271,10 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
     headers = {"Content-Type": "application/json"}
 
     if auth_header:
-        auth_value = f"{auth_prefix}{api_key}" if auth_prefix else api_key
+        normalized_prefix = auth_prefix
+        if auth_header.lower() == "authorization" and normalized_prefix and not normalized_prefix.endswith(" "):
+            normalized_prefix = f"{normalized_prefix} "
+        auth_value = f"{normalized_prefix}{api_key}" if normalized_prefix else api_key
         headers[auth_header] = auth_value
     elif auth_mode == "bearer":
         headers["Authorization"] = f"Bearer {api_key}"
