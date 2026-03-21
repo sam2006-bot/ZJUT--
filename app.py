@@ -239,16 +239,25 @@ def parse_multipart_form(headers, rfile) -> MultipartForm:
 def call_claude(system_prompt: str, user_prompt: str) -> str:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     model = os.getenv("ANTHROPIC_MODEL", "").strip()
+    api_base_url = os.getenv("CLAUDE_API_BASE_URL", "https://api.anthropic.com").strip()
+    api_path = os.getenv("CLAUDE_API_PATH", "/v1/messages").strip() or "/v1/messages"
+    auth_mode = os.getenv("CLAUDE_API_AUTH_MODE", "x-api-key").strip().lower() or "x-api-key"
+    api_version = os.getenv("CLAUDE_API_VERSION", "2023-06-01").strip()
 
     if not api_key:
         raise ValueError(
-            "未配置 ANTHROPIC_API_KEY。请在项目根目录新建 .env 文件，填入你自己的 Claude API key。"
+            "未配置 ANTHROPIC_API_KEY。请在项目根目录新建 .env 文件，填入你的 Claude API key 或代理 key。"
         )
 
     if not model:
         raise ValueError(
             "未配置 ANTHROPIC_MODEL。请在 .env 中填入你要使用的 Claude 模型名称。"
         )
+
+    if not api_base_url:
+        raise ValueError("未配置有效的 CLAUDE_API_BASE_URL。")
+
+    endpoint = f"{api_base_url.rstrip('/')}/{api_path.lstrip('/')}"
 
     request_body = {
         "model": model,
@@ -257,14 +266,20 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
         "messages": [{"role": "user", "content": user_prompt}],
     }
     request_data = json.dumps(request_body).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+
+    if auth_mode == "bearer":
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        headers["x-api-key"] = api_key
+
+    if api_version:
+        headers["anthropic-version"] = api_version
+
     request = urllib.request.Request(
-        url="https://api.anthropic.com/v1/messages",
+        url=endpoint,
         data=request_data,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -273,9 +288,9 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         details = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Claude API 请求失败（HTTP {error.code}）：{details}") from error
+        raise RuntimeError(f"Claude API/代理请求失败（HTTP {error.code}）：{details}") from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"Claude API 网络请求失败：{error.reason}") from error
+        raise RuntimeError(f"Claude API/代理网络请求失败：{error.reason}") from error
 
     text = extract_text_from_claude_response(payload)
     if not text:
