@@ -82,6 +82,8 @@ python3 app.py
 | `CLAUDE_API_BASE_URL` | 否 | Claude API 根地址，默认 `https://api.anthropic.com` |
 | `CLAUDE_API_PATH` | 否 | 请求路径，默认 `/v1/messages` |
 | `CLAUDE_API_AUTH_MODE` | 否 | 鉴权方式，默认 `x-api-key`，也可设为 `bearer` |
+| `CLAUDE_API_AUTH_HEADER` | 否 | 自定义鉴权头名；设置后会覆盖 `CLAUDE_API_AUTH_MODE` |
+| `CLAUDE_API_AUTH_PREFIX` | 否 | 自定义鉴权头前缀，例如 `Bearer ` |
 | `CLAUDE_API_VERSION` | 否 | `anthropic-version` 请求头，默认 `2023-06-01`；代理不支持时可留空 |
 | `INVITE_CODES` | 否 | 邀请码列表，逗号或换行分隔；留空则无需登录 |
 | `INVITE_SESSION_SECRET` | 否 | 会话签名密钥（设置邀请码时必填） |
@@ -107,6 +109,20 @@ CLAUDE_API_VERSION=
 - `CLAUDE_API_PATH` 默认保持 `/v1/messages`
 - 如果代理要求 `Authorization: Bearer ...`，把 `CLAUDE_API_AUTH_MODE` 改成 `bearer`
 - 如果代理不接受 `anthropic-version` 请求头，就把 `CLAUDE_API_VERSION` 留空
+
+如果代理要求更特殊的鉴权头，可以直接这样配：
+
+```env
+CLAUDE_API_AUTH_HEADER=Authorization
+CLAUDE_API_AUTH_PREFIX=
+```
+
+或者：
+
+```env
+CLAUDE_API_AUTH_HEADER=Authorization
+CLAUDE_API_AUTH_PREFIX=Bearer 
+```
 
 如果你的代理不是 Anthropic 协议，而是 OpenAI 风格的 `/v1/chat/completions`，当前项目还需要额外适配请求体和返回体，不能只靠改环境变量完成。
 

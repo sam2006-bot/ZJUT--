@@ -242,6 +242,8 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
     api_base_url = os.getenv("CLAUDE_API_BASE_URL", "https://api.anthropic.com").strip()
     api_path = os.getenv("CLAUDE_API_PATH", "/v1/messages").strip() or "/v1/messages"
     auth_mode = os.getenv("CLAUDE_API_AUTH_MODE", "x-api-key").strip().lower() or "x-api-key"
+    auth_header = os.getenv("CLAUDE_API_AUTH_HEADER", "").strip()
+    auth_prefix = os.getenv("CLAUDE_API_AUTH_PREFIX", "").strip()
     api_version = os.getenv("CLAUDE_API_VERSION", "2023-06-01").strip()
 
     if not api_key:
@@ -268,7 +270,10 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
     request_data = json.dumps(request_body).encode("utf-8")
     headers = {"Content-Type": "application/json"}
 
-    if auth_mode == "bearer":
+    if auth_header:
+        auth_value = f"{auth_prefix}{api_key}" if auth_prefix else api_key
+        headers[auth_header] = auth_value
+    elif auth_mode == "bearer":
         headers["Authorization"] = f"Bearer {api_key}"
     else:
         headers["x-api-key"] = api_key
