@@ -1,14 +1,14 @@
 # Claude Student Code Grader
 
-一个基于 Claude AI 的学生代码自动评分 Web 应用。教师可以设定作业要求，学生提交代码后由 Claude 进行智能评审并给出结构化的评分与反馈。
+一个基于 OpenAI 兼容代理协议的学生代码自动评分 Web 应用。教师可以设定作业要求，学生提交代码后仍然由 Claude 模型进行智能评审并给出结构化的评分与反馈。
 
 ## 功能特性
 
-- **智能代码评审** — 调用 Anthropic Claude API，从任务完成度、正确性、可读性、风格等多个维度评分（满分 100）
+- **智能代码评审** — 调用 OpenAI 兼容的 `chat/completions` 接口，但仍然使用供应商提供的 Claude 模型进行评分（满分 100）
 - **双模式反馈** — 支持教师模式（专业决策导向）和学生模式（建设性学习导向）
 - **自定义评分标准** — 可使用默认评分维度，也可由教师自定义 Rubric
 - **邀请码访问控制** — 可选的邀请码认证机制，基于 HMAC-SHA256 签名的会话管理
-- **代理切换支持** — 可通过环境变量切换到 Anthropic 兼容的第三方 Claude API 代理
+- **代理切换支持** — 可通过环境变量切换到 OpenAI 兼容的第三方代理，同时保留 Claude 模型名称
 - **零外部依赖** — 纯 Python 标准库实现后端，无需安装第三方包
 - **一键部署** — 提供 Render.com 部署配置，开箱即用
 
@@ -18,7 +18,7 @@
 |------|------|
 | 后端 | Python 3 标准库（`http.server`、`urllib`、`hmac`） |
 | 前端 | HTML5 + CSS3 + Vanilla JS（Markdown 渲染使用 marked.js CDN） |
-| AI   | Anthropic Claude API |
+| AI   | OpenAI 兼容 Chat Completions API + Claude 模型 |
 | 部署 | Render.com（Free Tier） |
 
 ## 项目结构
@@ -40,7 +40,7 @@
 ### 前置条件
 
 - Python 3（无需安装额外依赖）
-- Anthropic API Key
+- OpenAI 兼容代理 Key
 
 ### 本地运行
 
@@ -51,13 +51,12 @@ git clone <repo-url> && cd competition
 # 2. 配置环境变量
 cp .env.example .env
 # 编辑 .env，填入你的 API Key 和模型名称：
-#   ANTHROPIC_API_KEY=sk-ant-... 或代理 key
-#   ANTHROPIC_MODEL=你的模型名
-# 如果你用第三方 Anthropic 兼容代理，还可以额外设置：
-#   CLAUDE_API_BASE_URL=https://你的代理域名
-#   CLAUDE_API_PATH=/v1/messages
-#   CLAUDE_API_AUTH_MODE=x-api-key
-#   CLAUDE_API_VERSION=
+#   OPENAI_API_KEY=你的代理 key
+#   OPENAI_MODEL=供应商提供的 Claude 模型名
+# 如果你用第三方 OpenAI 兼容代理，还可以额外设置：
+#   OPENAI_BASE_URL=https://你的代理域名/v1
+#   OPENAI_API_PATH=/chat/completions
+#   OPENAI_API_AUTH_MODE=bearer
 
 # 3. 启动服务
 python3 app.py
@@ -69,64 +68,60 @@ python3 app.py
 
 1. 将项目推送到 GitHub
 2. 在 Render Dashboard 创建 Web Service 并关联仓库
-3. 在 Environment 中配置 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_MODEL`
-4. 如果使用第三方 Anthropic 兼容代理，再额外配置代理环境变量
+3. 在 Environment 中配置 `OPENAI_API_KEY` 和 `OPENAI_MODEL`
+4. 如果使用第三方 OpenAI 兼容代理，再额外配置 `OPENAI_BASE_URL`
 4. Render 会根据 `render.yaml` 自动部署
 
 ## 环境变量
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `ANTHROPIC_API_KEY` | 是 | Anthropic API 密钥 |
-| `ANTHROPIC_MODEL` | 是 | 使用的 Claude 模型（如 `claude-sonnet-4-6`） |
-| `CLAUDE_API_BASE_URL` | 否 | Claude API 根地址，默认 `https://api.anthropic.com` |
-| `CLAUDE_API_PATH` | 否 | 请求路径，默认 `/v1/messages` |
-| `CLAUDE_API_AUTH_MODE` | 否 | 鉴权方式，默认 `x-api-key`，也可设为 `bearer` |
-| `CLAUDE_API_AUTH_HEADER` | 否 | 自定义鉴权头名；设置后会覆盖 `CLAUDE_API_AUTH_MODE` |
-| `CLAUDE_API_AUTH_PREFIX` | 否 | 自定义鉴权头前缀，例如 `Bearer ` |
-| `CLAUDE_API_VERSION` | 否 | `anthropic-version` 请求头，默认 `2023-06-01`；代理不支持时可留空 |
+| `OPENAI_API_KEY` | 是 | OpenAI 兼容代理密钥 |
+| `OPENAI_MODEL` | 是 | 使用的模型名称；这里可以直接填写供应商提供的 Claude 模型名 |
+| `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 根地址，默认 `https://api.openai.com` |
+| `OPENAI_API_PATH` | 否 | 请求路径，默认建议 `/v1/chat/completions`；如果 base URL 已带 `/v1`，也可写 `/chat/completions` |
+| `OPENAI_API_AUTH_MODE` | 否 | 鉴权方式，默认 `bearer`，也可设为 `x-api-key` |
+| `OPENAI_API_AUTH_HEADER` | 否 | 自定义鉴权头名；设置后会覆盖 `OPENAI_API_AUTH_MODE` |
+| `OPENAI_API_AUTH_PREFIX` | 否 | 自定义鉴权头前缀，例如 `Bearer` |
 | `INVITE_CODES` | 否 | 邀请码列表，逗号或换行分隔；留空则无需登录 |
 | `INVITE_SESSION_SECRET` | 否 | 会话签名密钥（设置邀请码时必填） |
 | `APP_HOST` | 否 | 监听地址，默认 `0.0.0.0` |
 | `APP_PORT` | 否 | 监听端口，默认 `8000` |
 
-## 使用第三方 Claude API 代理
+## 使用 OpenAI 兼容代理调用 Claude 模型
 
-如果你的第三方服务兼容 Anthropic 的 `/v1/messages` 协议，你只需要改环境变量，不需要改代码：
+如果你的第三方服务兼容 OpenAI 的 `/v1/chat/completions` 协议，你只需要改环境变量，不需要改代码：
 
 ```env
-ANTHROPIC_API_KEY=你的代理key
-ANTHROPIC_MODEL=代理要求的模型名
-CLAUDE_API_BASE_URL=https://你的代理域名
-CLAUDE_API_PATH=/v1/messages
-CLAUDE_API_AUTH_MODE=x-api-key
-CLAUDE_API_VERSION=
+OPENAI_API_KEY=你的代理key
+OPENAI_MODEL=供应商要求的 Claude 模型名
+OPENAI_BASE_URL=https://你的代理域名/v1
+OPENAI_API_PATH=/chat/completions
+OPENAI_API_AUTH_MODE=bearer
 ```
 
 说明：
 
-- `CLAUDE_API_BASE_URL` 改成代理提供的域名
-- `CLAUDE_API_PATH` 默认保持 `/v1/messages`
-- 如果代理要求 `Authorization: Bearer ...`，把 `CLAUDE_API_AUTH_MODE` 改成 `bearer`
-- 如果代理不接受 `anthropic-version` 请求头，就把 `CLAUDE_API_VERSION` 留空
+- `OPENAI_MODEL` 填的是模型名，不是协议名；所以这里仍然可以写 Claude 模型
+- `OPENAI_BASE_URL` 改成代理提供的 OpenAI 兼容地址
+- 如果 `OPENAI_BASE_URL` 已经包含 `/v1`，程序会自动避免拼接成重复的 `/v1/v1/chat/completions`
+- 默认鉴权是 `Authorization: Bearer <key>`
 
 如果代理要求更特殊的鉴权头，可以直接这样配：
 
 ```env
-CLAUDE_API_AUTH_HEADER=Authorization
-CLAUDE_API_AUTH_PREFIX=
+OPENAI_API_AUTH_HEADER=Authorization
+OPENAI_API_AUTH_PREFIX=Bearer
 ```
 
 或者：
 
 ```env
-CLAUDE_API_AUTH_HEADER=Authorization
-CLAUDE_API_AUTH_PREFIX=Bearer
+OPENAI_API_AUTH_HEADER=X-API-Key
+OPENAI_API_AUTH_PREFIX=
 ```
 
-当 `CLAUDE_API_AUTH_HEADER=Authorization` 时，程序会自动在前缀和 key 之间补一个空格，所以你直接填 `Bearer` 就可以，不需要手动输入尾随空格。
-
-如果你的代理不是 Anthropic 协议，而是 OpenAI 风格的 `/v1/chat/completions`，当前项目还需要额外适配请求体和返回体，不能只靠改环境变量完成。
+当 `OPENAI_API_AUTH_HEADER=Authorization` 时，程序会自动在前缀和 key 之间补一个空格，所以你直接填 `Bearer` 就可以，不需要手动输入尾随空格。
 
 ## 评分维度（默认）
 

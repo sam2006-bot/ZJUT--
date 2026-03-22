@@ -101,13 +101,41 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str) ->
 """.strip()
 
 
-def extract_text_from_claude_response(payload: Dict) -> str:
-    blocks = payload.get("content", [])
-    texts = []
-    for block in blocks:
-        if block.get("type") == "text":
-            texts.append(block.get("text", ""))
-    return "\n".join(part for part in texts if part).strip()
+def extract_text_from_openai_response(payload: Dict) -> str:
+    choices = payload.get("choices", [])
+    if not isinstance(choices, list):
+        return ""
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+
+        message = choice.get("message", {})
+        if not isinstance(message, dict):
+            continue
+
+        content = message.get("content", "")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+        if isinstance(content, list):
+            texts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "text":
+                    continue
+                text_value = block.get("text", "")
+                if isinstance(text_value, str) and text_value.strip():
+                    texts.append(text_value.strip())
+            if texts:
+                return "\n".join(texts).strip()
+
+        refusal = message.get("refusal", "")
+        if isinstance(refusal, str) and refusal.strip():
+            return refusal.strip()
+
+    return ""
 
 
 def get_invite_codes() -> list[str]:
@@ -236,36 +264,45 @@ def parse_multipart_form(headers, rfile) -> MultipartForm:
     return MultipartForm(fields=fields, files=files)
 
 
-def call_claude(system_prompt: str, user_prompt: str) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    model = os.getenv("ANTHROPIC_MODEL", "").strip()
-    api_base_url = os.getenv("CLAUDE_API_BASE_URL", "https://api.anthropic.com").strip()
-    api_path = os.getenv("CLAUDE_API_PATH", "/v1/messages").strip() or "/v1/messages"
-    auth_mode = os.getenv("CLAUDE_API_AUTH_MODE", "x-api-key").strip().lower() or "x-api-key"
-    auth_header = os.getenv("CLAUDE_API_AUTH_HEADER", "").strip()
-    auth_prefix = os.getenv("CLAUDE_API_AUTH_PREFIX", "").strip()
-    api_version = os.getenv("CLAUDE_API_VERSION", "2023-06-01").strip()
+def build_openai_endpoint(api_base_url: str, api_path: str) -> str:
+    normalized_base = api_base_url.rstrip("/")
+    normalized_path = f"/{api_path.lstrip('/')}"
+    if normalized_base.endswith("/v1") and normalized_path.startswith("/v1/"):
+        normalized_path = normalized_path.removeprefix("/v1")
+    return f"{normalized_base}{normalized_path}"
+
+
+def call_openai_compatible_api(system_prompt: str, user_prompt: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    model = os.getenv("OPENAI_MODEL", "").strip()
+    api_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com").strip()
+    api_path = os.getenv("OPENAI_API_PATH", "/v1/chat/completions").strip() or "/v1/chat/completions"
+    auth_mode = os.getenv("OPENAI_API_AUTH_MODE", "bearer").strip().lower() or "bearer"
+    auth_header = os.getenv("OPENAI_API_AUTH_HEADER", "").strip()
+    auth_prefix = os.getenv("OPENAI_API_AUTH_PREFIX", "").strip()
 
     if not api_key:
         raise ValueError(
-            "未配置 ANTHROPIC_API_KEY。请在项目根目录新建 .env 文件，填入你的 Claude API key 或代理 key。"
+            "未配置 OPENAI_API_KEY。请在项目根目录新建 .env 文件，填入你的 OpenAI 兼容代理 key。"
         )
 
     if not model:
         raise ValueError(
-            "未配置 ANTHROPIC_MODEL。请在 .env 中填入你要使用的 Claude 模型名称。"
+            "未配置 OPENAI_MODEL。请在 .env 中填入你要使用的模型名称。这里仍然可以填写 Claude 模型名。"
         )
 
     if not api_base_url:
-        raise ValueError("未配置有效的 CLAUDE_API_BASE_URL。")
+        raise ValueError("未配置有效的 OPENAI_BASE_URL。")
 
-    endpoint = f"{api_base_url.rstrip('/')}/{api_path.lstrip('/')}"
+    endpoint = build_openai_endpoint(api_base_url, api_path)
 
     request_body = {
         "model": model,
         "max_tokens": 1800,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
     }
     request_data = json.dumps(request_body).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -281,9 +318,6 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
     else:
         headers["x-api-key"] = api_key
 
-    if api_version:
-        headers["anthropic-version"] = api_version
-
     request = urllib.request.Request(
         url=endpoint,
         data=request_data,
@@ -296,13 +330,13 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         details = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Claude API/代理请求失败（HTTP {error.code}）：{details}") from error
+        raise RuntimeError(f"OpenAI 兼容代理请求失败（HTTP {error.code}）：{details}") from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"Claude API/代理网络请求失败：{error.reason}") from error
+        raise RuntimeError(f"OpenAI 兼容代理网络请求失败：{error.reason}") from error
 
-    text = extract_text_from_claude_response(payload)
+    text = extract_text_from_openai_response(payload)
     if not text:
-        raise RuntimeError("Claude API 返回成功，但响应内容为空。")
+        raise RuntimeError("OpenAI 兼容代理返回成功，但响应内容为空。")
     return text
 
 
@@ -399,7 +433,7 @@ class AppHandler(BaseHTTPRequestHandler):
         }
         system_prompt = read_skill_prompt()
         user_prompt = build_user_prompt(fields, upload.filename, code_text)
-        return call_claude(system_prompt, user_prompt)
+        return call_openai_compatible_api(system_prompt, user_prompt)
 
     def handle_login_request(self) -> None:
         if not auth_enabled():
