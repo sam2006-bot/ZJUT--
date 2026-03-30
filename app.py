@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
 
+import code_runner
+
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
@@ -63,9 +65,8 @@ def read_skill_prompt() -> str:
     )
 
 
-def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str) -> str:
-    return f"""
-[Mode]
+def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str, test_results_text: str = "") -> str:
+    base = f"""[Mode]
 {fields.get("mode", "Teacher")}
 
 [Assignment Title]
@@ -87,7 +88,30 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str) ->
 {file_name}
 
 [Student Code]
-{code_text}
+{code_text}"""
+
+    if test_results_text:
+        base += f"""
+
+[Automated Test Results]
+以下是系统自动运行学生代码后得到的测试结果，请将其作为判断正确性的首要依据。
+
+{test_results_text}"""
+
+        base += """
+
+请严格依据上述信息进行批改，并使用中文输出。
+输出时请使用以下结构：
+1. 总评
+2. 自动测试结果分析（逐个分析失败样例的原因）
+3. 分项评分
+4. 主要优点
+5. 主要问题与错误原因分析
+6. 改进建议
+7. 最终分数（0-100）
+8. 置信度"""
+    else:
+        base += """
 
 请严格依据上述信息进行批改，并使用中文输出。
 输出时请使用以下结构：
@@ -97,8 +121,40 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str) ->
 4. 主要问题
 5. 改进建议
 6. 最终分数（0-100）
-7. 置信度
-""".strip()
+7. 置信度"""
+
+    return base.strip()
+
+
+def format_test_results_for_prompt(results: dict) -> str:
+    """Format test suite results as text for inclusion in the AI prompt."""
+    lines = [
+        f"总样例数: {results['total']}",
+        f"通过: {results['passed']}",
+        f"失败: {results['failed']}",
+    ]
+    if results.get("compile_error"):
+        lines.append(f"编译错误: {results['compile_error']}")
+    lines.append("")
+
+    status_labels = {
+        "passed": "通过",
+        "wrong_answer": "答案错误",
+        "runtime_error": "运行时错误",
+        "timeout": "超时",
+        "compile_error": "编译错误",
+    }
+    for case in results["cases"]:
+        label = status_labels.get(case["status"], case["status"])
+        lines.append(f"--- 样例 {case['index']} [{label}] ---")
+        lines.append(f"输入:\n{case['input']}")
+        lines.append(f"期望输出:\n{case['expected']}")
+        lines.append(f"实际输出:\n{case['actual']}")
+        if case.get("error_message"):
+            lines.append(f"错误信息: {case['error_message']}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def extract_text_from_openai_response(payload: Dict) -> str:
@@ -298,7 +354,7 @@ def call_openai_compatible_api(system_prompt: str, user_prompt: str) -> str:
 
     request_body = {
         "model": model,
-        "max_tokens": 1800,
+        "max_tokens": 4000,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -389,8 +445,8 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            result = self.handle_grade_request()
-            self.send_json(HTTPStatus.OK, {"ok": True, "result": result})
+            response = self.handle_grade_request()
+            self.send_json(HTTPStatus.OK, response)
         except ValueError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
         except RuntimeError as error:
@@ -401,7 +457,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 {"ok": False, "error": f"服务器内部错误：{error}"},
             )
 
-    def handle_grade_request(self) -> str:
+    def handle_grade_request(self) -> dict:
         form = parse_multipart_form(self.headers, self.rfile)
 
         upload = form.files.get("student_code")
@@ -431,9 +487,39 @@ class AppHandler(BaseHTTPRequestHandler):
             "programming_language": self._get_field_value(form.fields, "programming_language"),
             "rubric": self._get_field_value(form.fields, "rubric"),
         }
+
+        # Run automated tests if test cases are provided
+        test_results = None
+        test_results_text = ""
+        raw_cases = form.fields.get("test_cases", "").strip()
+        if raw_cases:
+            try:
+                test_cases = json.loads(raw_cases)
+                test_cases = [
+                    tc for tc in test_cases
+                    if isinstance(tc, dict) and ("input" in tc or "expected_output" in tc)
+                ]
+                for tc in test_cases:
+                    tc.setdefault("input", "")
+                    tc.setdefault("expected_output", "")
+                if test_cases:
+                    suite = code_runner.run_test_cases(
+                        code_text, upload.filename,
+                        fields["programming_language"], test_cases,
+                    )
+                    test_results = suite.to_dict()
+                    test_results_text = format_test_results_for_prompt(test_results)
+            except (json.JSONDecodeError, TypeError):
+                pass  # Malformed test cases — fall back to AI-only review
+
         system_prompt = read_skill_prompt()
-        user_prompt = build_user_prompt(fields, upload.filename, code_text)
-        return call_openai_compatible_api(system_prompt, user_prompt)
+        user_prompt = build_user_prompt(fields, upload.filename, code_text, test_results_text)
+        ai_result = call_openai_compatible_api(system_prompt, user_prompt)
+
+        response = {"ok": True, "result": ai_result}
+        if test_results is not None:
+            response["test_results"] = test_results
+        return response
 
     def handle_login_request(self) -> None:
         if not auth_enabled():

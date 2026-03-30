@@ -19,7 +19,7 @@
         </div>
         <h1>上传代码并交给 Claude 批改</h1>
         <p class="panel-copy">
-          左侧填写作业背景并上传代码，右侧会展示结构化批改结果。
+          填写作业要求、添加测试样例并上传代码。系统会先自动运行测试，再交给 AI 分析。
         </p>
       </div>
 
@@ -51,6 +51,17 @@
           <span>编程语言</span>
           <input type="text" name="programming_language" placeholder="例如：Python / C++ / Java" />
         </label>
+
+        <div class="test-cases-section">
+          <div class="test-cases-header">
+            <span class="field-label">测试样例</span>
+            <button type="button" id="add-test-case" class="btn-add-case">+ 添加样例</button>
+          </div>
+          <p class="test-cases-hint">
+            添加输入/输出样例后，系统会自动运行代码并对比结果。不添加则仅做静态代码审查。
+          </p>
+          <div id="test-cases-container"></div>
+        </div>
 
         <details class="advanced-options">
           <summary>高级选项</summary>

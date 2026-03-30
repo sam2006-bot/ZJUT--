@@ -1,6 +1,6 @@
 ---
 name: student-code-grader
-description: Review and grade student programming assignments using teacher requirements, task goals, and optional rubrics; provide teacher-mode or student-mode feedback and assign a fair score from 0 to 100.
+description: Review and grade student programming assignments using automated test results, teacher requirements, and optional rubrics; prioritize execution evidence for correctness, supplement with static analysis; provide teacher-mode or student-mode feedback and assign a fair score from 0 to 100.
 ---
 
 # Student Code Grader
@@ -14,11 +14,13 @@ It reads:
 - the programming language when provided
 - the optional rubric or scoring rules
 - the student's submitted code
+- **automated test results when available** (per-case pass/fail, actual vs expected output, runtime errors, timeouts)
 - optional sample input/output, constraints, or test expectations
 
 It then produces:
 - a structured evaluation
 - a clear explanation of strengths and weaknesses
+- **analysis of test failures when execution evidence is present**
 - category-level scoring
 - a final score from 0 to 100
 - audience-appropriate feedback in teacher mode or student mode
@@ -26,9 +28,11 @@ It then produces:
 ## Primary objective
 The primary objective is to determine whether the student successfully completed the assigned task.
 
+**When automated test results are provided, correctness is judged primarily from execution evidence.** Static code inspection supplements the analysis by explaining *why* failures occur and identifying issues that tests alone may not reveal (e.g., hardcoding, poor structure, edge cases not covered by the provided test set).
+
 Always prioritize evaluation in this order:
 1. task fulfillment
-2. correctness
+2. correctness (execution evidence first, static analysis second)
 3. completeness
 4. readability and structure
 5. coding style and naming
@@ -68,6 +72,7 @@ Look for the following information:
 - task objective
 - programming language
 - student submission
+- **automated test results** (if provided by the system)
 - optional rubric
 - optional sample input/output
 - optional constraints
@@ -75,6 +80,19 @@ Look for the following information:
 - optional audience mode: teacher or student
 
 If some information is missing, proceed with reasonable assumptions and state them explicitly.
+
+## Automated test result fields
+When the system provides automated test results, the following information may be present:
+- total number of test cases
+- number passed / failed
+- compile error message (if compilation failed)
+- per-case details:
+  - index
+  - status: passed, wrong_answer, runtime_error, timeout, compile_error
+  - input fed to the program
+  - expected output
+  - actual output
+  - error message (stderr or timeout details)
 
 ## Suggested input template
 The preferred input format is:
@@ -97,11 +115,11 @@ Teacher or Student
 [Optional Rubric]
 ...
 
-[Optional Sample Input/Output]
-...
-
 [Student Code]
 ...
+
+[Automated Test Results]
+(system-generated, may or may not be present)
 
 ## Review process
 When grading a submission, follow this process:
@@ -111,17 +129,29 @@ When grading a submission, follow this process:
    - identify explicit constraints
    - identify whether formatting, documentation, testing, or efficiency matters
 
-2. Read the student code carefully
+2. **Check automated test results first** (if provided)
+   - note overall pass rate
+   - identify which cases failed and their failure type
+   - note compile errors, runtime errors, or timeouts
+   - this is the primary evidence for correctness
+
+3. Read the student code
    - identify what the code is attempting to do
    - identify completed parts, incomplete parts, and missing parts
    - identify how closely the code aligns with the assignment
 
-3. Evaluate correctness
+4. **Correlate test failures with code** (if test results are provided)
+   - for each failed case, trace the root cause in the code
+   - classify the error type and explain why it fails
+   - distinguish between logic errors, boundary errors, format errors, and algorithm errors
+
+5. Evaluate correctness
+   - **if test results exist**: base correctness primarily on pass rate and failure analysis
+   - **if no test results**: evaluate based on static code inspection, noting uncertainty
    - check the main logic
    - look for incorrect conditions, broken flows, and invalid assumptions
-   - compare likely behavior against the assignment goal
 
-4. Evaluate code quality
+6. Evaluate code quality
    - naming clarity
    - readability
    - structure and organization
@@ -129,19 +159,52 @@ When grading a submission, follow this process:
    - unnecessary repetition
    - comments or explanation where relevant
 
-5. Evaluate robustness
+7. Evaluate robustness
    - input handling where appropriate
    - edge case handling where relevant
    - fragile or error-prone logic
    - unsafe patterns when applicable
 
-6. Score the submission
+8. Score the submission
    - use the teacher's rubric if one is provided
    - otherwise use the default scoring rubric in this skill
+   - **when test results are present, correctness score must reflect the pass rate**
 
-7. Produce feedback
+9. Produce feedback
    - tailor depth and tone to teacher mode or student mode
    - keep the evaluation fair, specific, and consistent with the final score
+
+## Error type analysis strategy
+When automated test results contain failures, analyze each failure type using the appropriate strategy:
+
+### wrong_answer
+- Compare expected vs actual output character by character
+- Look for off-by-one errors, incorrect formula, wrong loop bounds
+- Check for output formatting issues (extra spaces, missing newlines, wrong separators)
+- Check for partial correctness (some parts of output correct, others wrong)
+- Trace the logic path for the failing input through the code
+
+### runtime_error
+- Read the error message (segfault, exception, division by zero, etc.)
+- Identify which line or operation likely caused the crash
+- Check for uninitialized variables, null references, array out-of-bounds
+- Check for unhandled edge cases in the input
+
+### timeout
+- Identify likely infinite loops or excessive recursion
+- Check algorithm complexity vs input size
+- Look for missing loop termination conditions
+- Check for unnecessary nested loops or redundant computation
+
+### compile_error
+- Read the compiler error message
+- Identify syntax errors, missing imports, type mismatches
+- Note whether the code is substantially complete or barely started
+
+### partial pass (some cases pass, some fail)
+- Identify what distinguishes passing cases from failing cases
+- Look for edge cases, boundary conditions, or special input patterns
+- Check if the algorithm handles small inputs but fails on larger ones
 
 ## Default scoring rubric
 Use this rubric unless the teacher provides another one:
@@ -155,6 +218,18 @@ Use this rubric unless the teacher provides another one:
 - Comments / explanation / clarity: 5 points
 
 Total: 100 points
+
+### Correctness scoring with test results
+When automated test results are available, use the pass rate as the primary input for the Correctness dimension:
+
+- All cases pass: 27-30 points (deduct only for hardcoding or obvious cheating)
+- 75%+ pass: 20-26 points
+- 50-74% pass: 12-19 points
+- 25-49% pass: 6-11 points
+- <25% pass: 0-5 points
+- Compile error (0% pass): 0-3 points (give partial credit only if the code is nearly correct)
+
+These ranges are guidelines. Adjust based on the difficulty distribution of test cases and the nature of failures.
 
 ## Deduction guidance
 Use these patterns to keep scoring consistent:
@@ -197,15 +272,18 @@ Use these general score bands:
   - code may not solve the assigned problem
 
 ## Execution caution
-Do not claim that code definitely runs, compiles, or produces correct output unless execution evidence is available.
-
-If runtime behavior is uncertain:
+When **no automated test results** are provided:
+- do not claim that code definitely runs, compiles, or produces correct output
 - say that the judgment is based on static code inspection
-- describe the issue as likely, probable, or appears to cause a problem when appropriate
+- describe issues as likely, probable, or appears to cause a problem
 - do not fabricate test results
-- do not invent runtime errors, exact outputs, or performance metrics without evidence
+- do not invent runtime errors, exact outputs, or performance metrics
 
-If sample input/output is provided, compare the code against those examples carefully, but still avoid claiming actual execution unless it was verified.
+When **automated test results are provided**:
+- treat them as ground truth for what actually happened at runtime
+- do not contradict test results with speculation
+- use test evidence as the authoritative source for correctness judgments
+- still use static analysis to explain *why* failures occur
 
 ## Important grading rules
 - Grade against the assignment, not against ideal production software standards
@@ -236,6 +314,7 @@ When a custom rubric is provided, follow the custom rubric instead of the defaul
 Use the appropriate format based on audience mode.
 
 ### Teacher mode output
+
 # Code Assignment Review
 
 ## 1. Assignment summary
@@ -243,19 +322,72 @@ Use the appropriate format based on audience mode.
 - Key requirements identified
 - Assumptions made
 
-## 2. Completion assessment
+## 2. Automated test results (include only when test results are provided)
+- Overall pass rate: X/Y
+- Summary of failure types (wrong answer, runtime error, timeout, compile error)
+- Per-case analysis for failed cases:
+  - What the case tests
+  - Why the student's code fails
+  - Root cause in the code
+
+## 3. Completion assessment
 - Did the student meet the main task objective?
 - Which required parts are completed?
 - Which parts are incomplete or missing?
 
-## 3. Strengths
+## 4. Strengths
 - ...
 
-## 4. Issues found
+## 5. Issues found
 For each issue include:
 - Severity: Critical / Major / Minor
 - Problem
 - Why it matters
+
+## 6. Score breakdown
+- Task fulfillment: X/30
+- Correctness: X/30
+- Completeness: X/10
+- Readability and structure: X/10
+- Coding style and naming: X/10
+- Robustness and edge cases: X/5
+- Comments / explanation / clarity: X/5
+
+## 7. Final score
+**Total: X/100**
+
+## 8. Feedback for the student
+- What was done well
+- What should be improved
+- Concrete next steps
+
+## 9. Notes for the teacher
+- Confidence level: High / Medium / Low
+- Whether the evaluation includes automated test evidence or is based on static inspection only
+- Any ambiguity caused by unclear requirements
+
+### Student mode output
+
+# Programming Assignment Feedback
+
+## 1. What the assignment asked for
+- Brief summary of the task
+- Key goals identified
+- Assumptions made
+
+## 2. Test results (include only when test results are provided)
+- How many tests passed
+- What went wrong in failed tests (explained clearly)
+- What to look at in your code to fix each failure
+
+## 3. What you did well
+- ...
+
+## 4. What needs improvement
+For each issue include:
+- Severity: Critical / Major / Minor
+- What the problem is
+- How to improve it
 
 ## 5. Score breakdown
 - Task fulfillment: X/30
@@ -269,50 +401,11 @@ For each issue include:
 ## 6. Final score
 **Total: X/100**
 
-## 7. Feedback for the student
-- What was done well
-- What should be improved
-- Concrete next steps
-
-## 8. Notes for the teacher
-- Confidence level: High / Medium / Low
-- Whether the evaluation was based on static inspection only
-- Any ambiguity caused by unclear requirements
-
-### Student mode output
-# Programming Assignment Feedback
-
-## 1. What the assignment asked for
-- Brief summary of the task
-- Key goals identified
-- Assumptions made
-
-## 2. What you did well
+## 7. Suggested next steps
 - ...
 
-## 3. What needs improvement
-For each issue include:
-- Severity: Critical / Major / Minor
-- What the problem is
-- How to improve it
-
-## 4. Score breakdown
-- Task fulfillment: X/30
-- Correctness: X/30
-- Completeness: X/10
-- Readability and structure: X/10
-- Coding style and naming: X/10
-- Robustness and edge cases: X/5
-- Comments / explanation / clarity: X/5
-
-## 5. Final score
-**Total: X/100**
-
-## 6. Suggested next steps
-- ...
-
-## 7. Notes
-- Whether this evaluation is based on static code inspection only
+## 8. Notes
+- Whether this evaluation includes automated test evidence or is based on static code inspection only
 - Any uncertainty caused by missing requirements or missing test cases
 
 ## Review tone

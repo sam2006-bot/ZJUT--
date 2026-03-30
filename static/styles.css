@@ -50,6 +50,8 @@ body {
   position: sticky;
   top: 24px;
   align-self: start;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .panel-header h1,
@@ -363,6 +365,196 @@ button:disabled {
 
 .result-card.is-loading {
   opacity: 0.75;
+}
+
+/* --- Test cases section --- */
+
+.test-cases-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.test-cases-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-label {
+  font-weight: 700;
+  font-size: 0.96rem;
+}
+
+.test-cases-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.btn-add-case {
+  border: 1px solid rgba(166, 61, 26, 0.25);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: rgba(255, 248, 241, 0.9);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.btn-add-case:hover {
+  background: rgba(255, 240, 225, 1);
+  transform: none;
+}
+
+.test-case-card {
+  border: 1px solid rgba(70, 52, 33, 0.14);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 249, 241, 0.9);
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.test-case-card .field {
+  gap: 4px;
+}
+
+.test-case-card textarea {
+  min-height: 56px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.88rem;
+}
+
+.test-case-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.btn-remove-case {
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: rgba(166, 61, 26, 0.08);
+  color: var(--accent);
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.btn-remove-case:hover {
+  background: rgba(166, 61, 26, 0.18);
+  transform: none;
+}
+
+/* --- Test results panel (inside result card) --- */
+
+.test-results-panel {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid var(--line);
+}
+
+.test-results-panel h3 {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+}
+
+.test-summary {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  margin-bottom: 14px;
+}
+
+.summary-all-pass {
+  background: rgba(34, 139, 34, 0.1);
+  color: #1a6b1a;
+}
+
+.summary-partial {
+  background: rgba(200, 150, 30, 0.12);
+  color: #7a5a00;
+}
+
+.summary-all-fail {
+  background: rgba(192, 62, 28, 0.1);
+  color: #8e2e12;
+}
+
+.test-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.test-results-table th,
+.test-results-table td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.test-results-table th {
+  background: rgba(166, 61, 26, 0.06);
+  font-weight: 700;
+}
+
+.test-results-table pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.85rem;
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 1.4;
+}
+
+.status-cell {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.status-passed .status-cell {
+  color: #1a6b1a;
+}
+
+.status-wrong .status-cell {
+  color: #c03e1c;
+}
+
+.status-error .status-cell {
+  color: #b35000;
+}
+
+.status-timeout .status-cell {
+  color: #7a5a00;
+}
+
+.error-detail {
+  font-size: 0.82rem;
+  color: #8e2e12;
+  background: rgba(192, 62, 28, 0.04);
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
 }
 
 @media (max-width: 900px) {
