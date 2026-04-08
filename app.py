@@ -128,11 +128,19 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str, te
 
 def format_test_results_for_prompt(results: dict) -> str:
     """Format test suite results as text for inclusion in the AI prompt."""
+    compare_mode_labels = {
+        "strict": "严格匹配（去除首尾空白）",
+        "numbers_only": "仅比较数字（忽略文字描述）",
+        "contains": "包含匹配（期望出现在实际输出中）",
+    }
     lines = [
         f"总样例数: {results['total']}",
         f"通过: {results['passed']}",
         f"失败: {results['failed']}",
     ]
+    mode = results.get("compare_mode")
+    if mode:
+        lines.append(f"输出比较模式: {compare_mode_labels.get(mode, mode)}")
     if results.get("compile_error"):
         lines.append(f"编译错误: {results['compile_error']}")
     lines.append("")
@@ -491,6 +499,7 @@ class AppHandler(BaseHTTPRequestHandler):
         # Run automated tests if test cases are provided
         test_results = None
         test_results_text = ""
+        compare_mode = self._get_field_value(form.fields, "compare_mode", "strict").strip() or "strict"
         raw_cases = form.fields.get("test_cases", "").strip()
         if raw_cases:
             try:
@@ -506,8 +515,10 @@ class AppHandler(BaseHTTPRequestHandler):
                     suite = code_runner.run_test_cases(
                         code_text, upload.filename,
                         fields["programming_language"], test_cases,
+                        compare_mode=compare_mode,
                     )
                     test_results = suite.to_dict()
+                    test_results["compare_mode"] = compare_mode
                     test_results_text = format_test_results_for_prompt(test_results)
             except (json.JSONDecodeError, TypeError):
                 pass  # Malformed test cases — fall back to AI-only review

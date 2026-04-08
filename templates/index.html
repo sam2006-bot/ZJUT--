@@ -60,6 +60,14 @@
           <p class="test-cases-hint">
             添加输入/输出样例后，系统会自动运行代码并对比结果。不添加则仅做静态代码审查。
           </p>
+          <label class="field compare-mode-field">
+            <span>输出比较模式</span>
+            <select name="compare_mode">
+              <option value="strict">严格匹配（去除首尾空白）</option>
+              <option value="numbers_only">仅比较数字（忽略文字描述，如「计算结果是 9」匹配「9」）</option>
+              <option value="contains">包含匹配（期望输出作为子串出现在实际输出中）</option>
+            </select>
+          </label>
           <div id="test-cases-container"></div>
         </div>
 

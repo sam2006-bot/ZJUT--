@@ -69,21 +69,65 @@ class TestSuiteResult:
 # Output comparison
 # ---------------------------------------------------------------------------
 
-def compare_output(expected: str, actual: str) -> bool:
-    """
-    Compare expected and actual output with tolerance:
-    - Strip trailing whitespace from each line
-    - Remove trailing empty lines
-    - Normalize \\r\\n to \\n
-    """
-    def normalize(s: str) -> str:
-        lines = s.replace("\r\n", "\n").replace("\r", "\n").splitlines()
-        lines = [line.rstrip() for line in lines]
-        while lines and not lines[-1]:
-            lines.pop()
-        return "\n".join(lines)
+NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
-    return normalize(expected) == normalize(actual)
+
+def _normalize_strict(s: str) -> str:
+    """Whitespace-tolerant normalization: strip per-line trailing space and trailing empty lines."""
+    lines = s.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    lines = [line.rstrip() for line in lines]
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _extract_numbers(text: str) -> list:
+    """
+    Extract all numeric tokens from text and normalize them.
+    Integers and equivalent floats compare equal (e.g. '9' == '9.0').
+    """
+    out = []
+    for token in NUMBER_RE.findall(text):
+        try:
+            value = float(token)
+        except ValueError:
+            continue
+        if value.is_integer():
+            out.append(str(int(value)))
+        else:
+            out.append(repr(value))
+    return out
+
+
+def _normalize_contains(s: str) -> str:
+    """Collapse all whitespace into single spaces for substring matching."""
+    return " ".join(s.split())
+
+
+def compare_output(expected: str, actual: str, mode: str = "strict") -> bool:
+    """
+    Compare expected vs actual output using the selected mode.
+
+    Modes
+    -----
+    strict       : per-line trailing whitespace removed, trailing empty lines ignored, line endings normalized
+    numbers_only : extract numeric tokens from each side and compare sequence
+                   (handles outputs like "计算结果是 9" vs "9")
+    contains     : expected output (whitespace-normalized) must appear as a substring
+                   inside actual output (whitespace-normalized)
+    """
+    if mode == "numbers_only":
+        return _extract_numbers(expected) == _extract_numbers(actual)
+
+    if mode == "contains":
+        norm_expected = _normalize_contains(expected)
+        norm_actual = _normalize_contains(actual)
+        if not norm_expected:
+            return True
+        return norm_expected in norm_actual
+
+    # default: strict
+    return _normalize_strict(expected) == _normalize_strict(actual)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +185,7 @@ def _compile(cmd: list, work_dir: str) -> Optional[str]:
 # Single test case runner
 # ---------------------------------------------------------------------------
 
-def _run_single(cmd: list, input_data: str, expected: str, index: int, work_dir: str) -> TestCaseResult:
+def _run_single(cmd: list, input_data: str, expected: str, index: int, work_dir: str, compare_mode: str = "strict") -> TestCaseResult:
     """Execute one test case and compare output."""
     try:
         result = subprocess.run(
@@ -161,7 +205,7 @@ def _run_single(cmd: list, input_data: str, expected: str, index: int, work_dir:
             err = (result.stderr[:1000] if result.stderr else f"Process exited with code {result.returncode}")
             return TestCaseResult(index, input_data, expected, actual, "runtime_error", err)
 
-        if compare_output(expected, actual):
+        if compare_output(expected, actual, mode=compare_mode):
             return TestCaseResult(index, input_data, expected, actual, "passed")
 
         return TestCaseResult(index, input_data, expected, actual, "wrong_answer")
@@ -177,7 +221,7 @@ def _run_single(cmd: list, input_data: str, expected: str, index: int, work_dir:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_test_cases(code: str, filename: str, language_hint: str, test_cases: list) -> TestSuiteResult:
+def run_test_cases(code: str, filename: str, language_hint: str, test_cases: list, compare_mode: str = "strict") -> TestSuiteResult:
     """
     Run student code against provided test cases.
 
@@ -191,11 +235,16 @@ def run_test_cases(code: str, filename: str, language_hint: str, test_cases: lis
         Language string from the form (e.g. "Python", "C++").
     test_cases : list[dict]
         Each dict must contain ``input`` and ``expected_output`` keys.
+    compare_mode : str
+        Output comparison mode: "strict", "numbers_only", or "contains".
 
     Returns
     -------
     TestSuiteResult
     """
+    if compare_mode not in ("strict", "numbers_only", "contains"):
+        compare_mode = "strict"
+
     if not test_cases:
         return TestSuiteResult(0, 0, 0, summary="No test cases provided")
 
@@ -211,12 +260,12 @@ def run_test_cases(code: str, filename: str, language_hint: str, test_cases: lis
 
     work_dir = tempfile.mkdtemp(prefix="student_code_")
     try:
-        return _execute_in_workdir(code, filename, lang, test_cases, work_dir)
+        return _execute_in_workdir(code, filename, lang, test_cases, work_dir, compare_mode)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _execute_in_workdir(code: str, filename: str, lang: str, test_cases: list, work_dir: str) -> TestSuiteResult:
+def _execute_in_workdir(code: str, filename: str, lang: str, test_cases: list, work_dir: str, compare_mode: str = "strict") -> TestSuiteResult:
     """Prepare files, compile if needed, and run all test cases."""
     java_class = None
 
@@ -266,7 +315,7 @@ def _execute_in_workdir(code: str, filename: str, lang: str, test_cases: list, w
     results: List[TestCaseResult] = []
     passed = 0
     for i, tc in enumerate(test_cases):
-        r = _run_single(run_cmd, tc["input"], tc["expected_output"], i + 1, work_dir)
+        r = _run_single(run_cmd, tc["input"], tc["expected_output"], i + 1, work_dir, compare_mode)
         results.append(r)
         if r.status == "passed":
             passed += 1
