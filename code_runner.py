@@ -158,6 +158,28 @@ def detect_language(filename: str, language_hint: str = "") -> str:
     }.get(ext, "")
 
 
+def detect_submission_language(files: list[dict], language_hint: str = "") -> str:
+    """Detect language for a multi-file submission."""
+    if not files:
+        return ""
+
+    hinted = detect_language(str(files[0].get("path", "")), language_hint)
+    if hinted:
+        return hinted
+
+    counts: dict[str, int] = {}
+    for source_file in files:
+        detected = detect_language(str(source_file.get("path", "")))
+        if not detected:
+            continue
+        counts[detected] = counts.get(detected, 0) + 1
+
+    if not counts:
+        return ""
+
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
 # ---------------------------------------------------------------------------
 # Compilation helper
 # ---------------------------------------------------------------------------
@@ -179,6 +201,68 @@ def _compile(cmd: list, work_dir: str) -> Optional[str]:
         return "Compilation timed out"
     except FileNotFoundError as exc:
         return f"Compiler not found: {exc}"
+
+
+def _normalize_relative_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    clean_parts = []
+    for part in path.parts:
+        if part in {"", ".", os.sep}:
+            continue
+        if part == "..":
+            continue
+        clean_parts.append(part)
+    return Path(*clean_parts) if clean_parts else Path("submission.txt")
+
+
+def _select_language_files(files: list[dict], lang: str) -> list[dict]:
+    return [
+        source_file
+        for source_file in files
+        if detect_language(str(source_file.get("path", ""))) == lang
+    ]
+
+
+def _entry_score(source_file: dict, lang: str) -> tuple:
+    relative_path = str(source_file.get("path", ""))
+    file_name = Path(relative_path).name.lower()
+    content = str(source_file.get("content", ""))
+    score = 0
+
+    if lang == "python":
+        if re.search(r"if\s+__name__\s*==\s*[\"']__main__[\"']", content):
+            score += 100
+        if file_name in {"main.py", "app.py", "index.py", "run.py"}:
+            score += 20
+    elif lang in {"c", "cpp"}:
+        if re.search(r"\bmain\s*\(", content):
+            score += 100
+        if file_name.startswith("main."):
+            score += 20
+    elif lang == "java":
+        if re.search(r"public\s+static\s+void\s+main\s*\(", content):
+            score += 100
+        if file_name == "main.java":
+            score += 20
+
+    return (score, len(content), -len(relative_path))
+
+
+def _choose_entry_file(files: list[dict], lang: str) -> Optional[dict]:
+    if not files:
+        return None
+    return max(files, key=lambda source_file: _entry_score(source_file, lang))
+
+
+def _extract_java_run_target(source_file: dict) -> str:
+    content = str(source_file.get("content", ""))
+    relative_path = str(source_file.get("path", ""))
+    class_match = re.search(r"(?:public\s+)?class\s+(\w+)", content)
+    class_name = class_match.group(1) if class_match else Path(relative_path).stem
+    package_match = re.search(r"^\s*package\s+([\w.]+)\s*;", content, re.MULTILINE)
+    if package_match:
+        return f"{package_match.group(1)}.{class_name}"
+    return class_name
 
 
 # ---------------------------------------------------------------------------
@@ -242,54 +326,88 @@ def run_test_cases(code: str, filename: str, language_hint: str, test_cases: lis
     -------
     TestSuiteResult
     """
+    return run_submission_test_cases(
+        [{"path": filename, "content": code}],
+        language_hint,
+        test_cases,
+        compare_mode=compare_mode,
+    )
+
+
+def run_submission_test_cases(files: list[dict], language_hint: str, test_cases: list, compare_mode: str = "strict") -> TestSuiteResult:
+    """Run test cases against a submission that may contain multiple source files."""
     if compare_mode not in ("strict", "numbers_only", "contains"):
         compare_mode = "strict"
 
     if not test_cases:
         return TestSuiteResult(0, 0, 0, summary="No test cases provided")
 
-    lang = detect_language(filename, language_hint)
-    if not lang:
+    if not files:
         return TestSuiteResult(
             total=len(test_cases),
             passed=0,
             failed=len(test_cases),
-            compile_error=f"Cannot detect language (file: {filename}, hint: {language_hint})",
+            compile_error="No source files provided",
+            summary=f"0/{len(test_cases)} passed (missing source files)",
+        )
+
+    lang = detect_submission_language(files, language_hint)
+    if not lang:
+        file_list = ", ".join(str(source_file.get("path", "")) for source_file in files)
+        return TestSuiteResult(
+            total=len(test_cases),
+            passed=0,
+            failed=len(test_cases),
+            compile_error=f"Cannot detect language (files: {file_list}, hint: {language_hint})",
             summary=f"0/{len(test_cases)} passed (unknown language)",
         )
 
     work_dir = tempfile.mkdtemp(prefix="student_code_")
     try:
-        return _execute_in_workdir(code, filename, lang, test_cases, work_dir, compare_mode)
+        return _execute_submission_in_workdir(files, lang, test_cases, work_dir, compare_mode)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _execute_in_workdir(code: str, filename: str, lang: str, test_cases: list, work_dir: str, compare_mode: str = "strict") -> TestSuiteResult:
-    """Prepare files, compile if needed, and run all test cases."""
-    java_class = None
+def _execute_submission_in_workdir(files: list[dict], lang: str, test_cases: list, work_dir: str, compare_mode: str = "strict") -> TestSuiteResult:
+    """Prepare a multi-file submission, compile if needed, and run all test cases."""
+    relevant_files = _select_language_files(files, lang)
+    if not relevant_files:
+        return TestSuiteResult(
+            total=len(test_cases),
+            passed=0,
+            failed=len(test_cases),
+            compile_error=f"No {lang} source files found in submission",
+            summary=f"0/{len(test_cases)} passed (missing source files)",
+        )
 
-    # Write source file
-    if lang == "java":
-        match = re.search(r"public\s+class\s+(\w+)", code)
-        java_class = match.group(1) if match else Path(filename).stem
-        code_file = os.path.join(work_dir, f"{java_class}.java")
-    else:
-        code_file = os.path.join(work_dir, filename)
+    written_files: dict[str, str] = {}
+    for source_file in files:
+        relative_path = _normalize_relative_path(str(source_file.get("path", "")))
+        absolute_path = Path(work_dir) / relative_path
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        absolute_path.write_text(str(source_file.get("content", "")), encoding="utf-8")
+        written_files[str(relative_path)] = str(absolute_path)
 
-    with open(code_file, "w", encoding="utf-8") as fh:
-        fh.write(code)
-
-    # Compile step (C / C++ / Java)
     compile_error = None
     exe_path = os.path.join(work_dir, "a.out")
+    entry_file = _choose_entry_file(relevant_files, lang) or relevant_files[0]
 
     if lang == "c":
-        compile_error = _compile(["gcc", code_file, "-o", exe_path, "-lm"], work_dir)
+        compile_error = _compile(
+            ["gcc"] + [written_files[str(_normalize_relative_path(str(file["path"])))] for file in relevant_files] + ["-o", exe_path, "-lm"],
+            work_dir,
+        )
     elif lang == "cpp":
-        compile_error = _compile(["g++", code_file, "-o", exe_path, "-lm", "-std=c++17"], work_dir)
+        compile_error = _compile(
+            ["g++"] + [written_files[str(_normalize_relative_path(str(file["path"])))] for file in relevant_files] + ["-o", exe_path, "-lm", "-std=c++17"],
+            work_dir,
+        )
     elif lang == "java":
-        compile_error = _compile(["javac", code_file], work_dir)
+        compile_error = _compile(
+            ["javac"] + [written_files[str(_normalize_relative_path(str(file["path"])))] for file in relevant_files],
+            work_dir,
+        )
 
     if compile_error:
         cases = [
@@ -301,23 +419,24 @@ def _execute_in_workdir(code: str, filename: str, lang: str, test_cases: list, w
             f"0/{len(test_cases)} passed (compile error)",
         )
 
-    # Build run command
     if lang == "python":
-        run_cmd = ["python3", code_file]
+        run_cmd = [
+            "python3",
+            written_files[str(_normalize_relative_path(str(entry_file["path"])))],
+        ]
     elif lang in ("c", "cpp"):
         run_cmd = [exe_path]
     elif lang == "java":
-        run_cmd = ["java", "-cp", work_dir, java_class]
+        run_cmd = ["java", "-cp", work_dir, _extract_java_run_target(entry_file)]
     else:
         run_cmd = []
 
-    # Execute each test case
     results: List[TestCaseResult] = []
     passed = 0
     for i, tc in enumerate(test_cases):
-        r = _run_single(run_cmd, tc["input"], tc["expected_output"], i + 1, work_dir, compare_mode)
-        results.append(r)
-        if r.status == "passed":
+        result = _run_single(run_cmd, tc["input"], tc["expected_output"], i + 1, work_dir, compare_mode)
+        results.append(result)
+        if result.status == "passed":
             passed += 1
 
     failed = len(test_cases) - passed

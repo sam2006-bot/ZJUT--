@@ -19,7 +19,7 @@
         </div>
         <h1>上传代码并交给 Claude 批改</h1>
         <p class="panel-copy">
-          填写作业要求、添加测试样例并上传代码。系统会先自动运行测试，再交给 AI 分析。
+          填写作业要求、添加测试样例并上传单个代码文件，或直接上传包含全班作业的 ZIP 压缩包。系统会先自动运行测试，再交给 AI 分析。
         </p>
       </div>
 
@@ -85,8 +85,15 @@
         </details>
 
         <label class="upload-card" for="student_code">
-          <input id="student_code" name="student_code" type="file" required />
-          <span class="upload-label">上传学生代码文件</span>
+          <input
+            id="student_code"
+            name="student_code"
+            type="file"
+            accept=".zip,.py,.c,.cpp,.cxx,.cc,.java"
+            required
+          />
+          <span class="upload-label">上传学生代码文件或 ZIP 压缩包</span>
+          <span class="upload-help">单文件适合即时批改，ZIP 适合整班批量批改并导出结果。</span>
           <span id="file-name" class="upload-name">尚未选择文件</span>
         </label>
 
@@ -98,13 +105,17 @@
       <div class="panel-header">
         <p class="eyebrow">Claude Review</p>
         <h2>批改结果</h2>
-        <p class="panel-copy">提交后，Claude 的批改内容会显示在这里。</p>
+        <p class="panel-copy">提交后，单份报告或整批批改结果都会显示在这里。</p>
       </div>
 
-      <div id="status" class="status">等待上传代码文件。</div>
+      <div id="status" class="status">等待上传代码文件或 ZIP 压缩包。</div>
+      <div id="result-toolbar" class="result-toolbar" hidden>
+        <a id="export-link" class="link-button result-link" href="#" hidden>导出全部结果</a>
+      </div>
+      <section id="batch-summary" class="batch-summary" hidden></section>
       <article id="result" class="result-card">
         <p class="placeholder">
-          建议先填写作业要求，这样 Claude 的评分会更稳定，也更接近我们给AI设定的评审逻辑。
+          建议先填写作业要求，这样 Claude 的评分会更稳定，也更接近我们给 AI 设定的评审逻辑。批量 ZIP 批改完成后，还可以一键导出所有报告与统计信息。
         </p>
       </article>
     </section>

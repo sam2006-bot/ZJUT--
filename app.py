@@ -1,20 +1,27 @@
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
+import csv
+import datetime as dt
 import hashlib
 import hmac
 import html
+import io
 import json
 import mimetypes
 import os
+import re
+import secrets
 import sys
+import threading
 import urllib.error
 import urllib.request
 import urllib.parse
+import zipfile
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Optional
 
 import code_runner
@@ -26,10 +33,25 @@ TEMPLATES_DIR = ROOT / "templates"
 SKILL_PATH = ROOT / ".claude" / "skills" / "student-code-grader" / "SKILL.md"
 LOGIN_TEMPLATE_PATH = TEMPLATES_DIR / "login.html"
 ENV_PATH = ROOT / ".env"
-MAX_UPLOAD_BYTES = 1024 * 1024
-MAX_FORM_BYTES = MAX_UPLOAD_BYTES + 256 * 1024
+MAX_SINGLE_UPLOAD_BYTES = 1024 * 1024
+MAX_BATCH_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_BATCH_EXTRACTED_BYTES = 40 * 1024 * 1024
+MAX_SOURCE_FILE_BYTES = 1024 * 1024
+MAX_ARCHIVE_SOURCE_FILES = 500
+MAX_BATCH_SUBMISSIONS = 200
+MAX_FORM_BYTES = MAX_BATCH_UPLOAD_BYTES + 256 * 1024
 SESSION_COOKIE_NAME = "invite_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
+SUPPORTED_SOURCE_EXTENSIONS = {".py", ".c", ".cpp", ".cxx", ".cc", ".java"}
+EXPORT_CACHE_LIMIT = 24
+MACHINE_TAG_PATTERN = re.compile(
+    r"^\[\[(FINAL_SCORE|CONFIDENCE):\s*(.*?)\]\]\s*$",
+    re.MULTILINE,
+)
+FALLBACK_SCORE_PATTERN = re.compile(
+    r"(?:最终分数|最终得分|Final Score|Score)[^0-9]{0,20}([0-9]{1,3}(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -42,6 +64,30 @@ class UploadedFile:
 class MultipartForm:
     fields: Dict[str, str]
     files: Dict[str, UploadedFile]
+
+
+@dataclass
+class SubmissionFile:
+    relative_path: str
+    content: str
+
+
+@dataclass
+class SubmissionPackage:
+    identifier: str
+    display_name: str
+    files: list[SubmissionFile]
+
+
+@dataclass
+class ExportBundle:
+    filename: str
+    content_type: str
+    content: bytes
+
+
+EXPORT_CACHE: Dict[str, ExportBundle] = {}
+EXPORT_CACHE_LOCK = threading.Lock()
 
 
 def load_dotenv(env_path: Path) -> None:
@@ -109,7 +155,11 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str, te
 5. 主要问题与错误原因分析
 6. 改进建议
 7. 最终分数（0-100）
-8. 置信度"""
+8. 置信度
+
+最后请在回复末尾额外追加以下两行机器读取标记，不要放进代码块，也不要省略：
+[[FINAL_SCORE: 0-100 的整数]]
+[[CONFIDENCE: 高/中/低]]"""
     else:
         base += """
 
@@ -121,7 +171,11 @@ def build_user_prompt(fields: Dict[str, str], file_name: str, code_text: str, te
 4. 主要问题
 5. 改进建议
 6. 最终分数（0-100）
-7. 置信度"""
+7. 置信度
+
+最后请在回复末尾额外追加以下两行机器读取标记，不要放进代码块，也不要省略：
+[[FINAL_SCORE: 0-100 的整数]]
+[[CONFIDENCE: 高/中/低]]"""
 
     return base.strip()
 
@@ -292,7 +346,7 @@ def parse_multipart_form(headers, rfile) -> MultipartForm:
     if content_length <= 0:
         raise ValueError("请求体为空。")
     if content_length > MAX_FORM_BYTES:
-        raise ValueError("上传内容过大，请控制代码文件在 1MB 以内。")
+        raise ValueError("上传内容过大，请控制单个代码文件在 1MB 以内、ZIP 压缩包在 20MB 以内。")
 
     body = rfile.read(content_length)
     if len(body) != content_length:
@@ -334,6 +388,489 @@ def build_openai_endpoint(api_base_url: str, api_path: str) -> str:
     if normalized_base.endswith("/v1") and normalized_path.startswith("/v1/"):
         normalized_path = normalized_path.removeprefix("/v1")
     return f"{normalized_base}{normalized_path}"
+
+
+def normalize_compare_mode(raw_value: str) -> str:
+    compare_mode = raw_value.strip() or "strict"
+    if compare_mode not in {"strict", "numbers_only", "contains"}:
+        return "strict"
+    return compare_mode
+
+
+def build_grading_fields(raw_fields: Dict[str, str]) -> Dict[str, str]:
+    return {
+        "mode": str(raw_fields.get("mode", "Teacher")),
+        "assignment_title": str(raw_fields.get("assignment_title", "")),
+        "assignment_requirements": str(raw_fields.get("assignment_requirements", "")),
+        "task_goal": str(raw_fields.get("task_goal", "")),
+        "programming_language": str(raw_fields.get("programming_language", "")),
+        "rubric": str(raw_fields.get("rubric", "")),
+    }
+
+
+def parse_test_cases(raw_cases: str) -> list[dict]:
+    raw_cases = raw_cases.strip()
+    if not raw_cases:
+        return []
+
+    try:
+        loaded = json.loads(raw_cases)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    test_cases = []
+    if not isinstance(loaded, list):
+        return test_cases
+
+    for raw_case in loaded:
+        if not isinstance(raw_case, dict):
+            continue
+        if "input" not in raw_case and "expected_output" not in raw_case:
+            continue
+        test_cases.append(
+            {
+                "input": str(raw_case.get("input", "")),
+                "expected_output": str(raw_case.get("expected_output", "")),
+            }
+        )
+
+    return test_cases
+
+
+def decode_text_content(content: bytes) -> str:
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("utf-8", errors="replace")
+
+
+def format_submission_code(files: list[SubmissionFile]) -> str:
+    if len(files) == 1:
+        return files[0].content
+
+    chunks = []
+    for submission_file in files:
+        chunks.append(
+            f"===== 文件: {submission_file.relative_path} =====\n{submission_file.content}"
+        )
+    return "\n\n".join(chunks)
+
+
+def build_submission_summary(submission: SubmissionPackage) -> str:
+    if len(submission.files) == 1:
+        return submission.files[0].relative_path
+    return f"{submission.display_name}（{len(submission.files)} 个文件）"
+
+
+def sanitize_submission_identifier(value: str) -> str:
+    identifier = re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-").lower()
+    return identifier or "submission"
+
+
+def build_single_submission(upload: UploadedFile) -> SubmissionPackage:
+    if not upload.filename:
+        raise ValueError("上传文件缺少文件名。")
+
+    if len(upload.content) > MAX_SINGLE_UPLOAD_BYTES:
+        raise ValueError("上传文件过大，请控制在 1MB 以内。")
+
+    code_text = decode_text_content(upload.content)
+    if not code_text.strip():
+        raise ValueError("上传的代码文件内容为空。")
+
+    return SubmissionPackage(
+        identifier=sanitize_submission_identifier(Path(upload.filename).stem or upload.filename),
+        display_name=upload.filename,
+        files=[SubmissionFile(relative_path=upload.filename, content=code_text)],
+    )
+
+
+def is_supported_source_file(path: PurePosixPath) -> bool:
+    return path.suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS
+
+
+def normalize_archive_member_path(name: str) -> Optional[PurePosixPath]:
+    normalized = PurePosixPath(name.replace("\\", "/"))
+    if normalized.is_absolute():
+        return None
+
+    clean_parts = []
+    for part in normalized.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            return None
+        if part == "__MACOSX" or part.startswith("."):
+            return None
+        clean_parts.append(part)
+
+    if not clean_parts:
+        return None
+
+    return PurePosixPath(*clean_parts)
+
+
+def strip_common_archive_root(paths: list[PurePosixPath]) -> list[PurePosixPath]:
+    trimmed = list(paths)
+    while trimmed and all(len(path.parts) > 1 for path in trimmed):
+        first_component = trimmed[0].parts[0]
+        if not all(path.parts[0] == first_component for path in trimmed):
+            break
+        trimmed = [PurePosixPath(*path.parts[1:]) for path in trimmed]
+    return trimmed
+
+
+def build_batch_submissions(upload: UploadedFile) -> list[SubmissionPackage]:
+    if len(upload.content) > MAX_BATCH_UPLOAD_BYTES:
+        raise ValueError("ZIP 压缩包过大，请控制在 20MB 以内。")
+
+    source_entries: list[tuple[PurePosixPath, str]] = []
+    total_uncompressed_bytes = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(upload.content)) as archive:
+            for file_info in archive.infolist():
+                if file_info.is_dir():
+                    continue
+
+                normalized_path = normalize_archive_member_path(file_info.filename)
+                if normalized_path is None:
+                    continue
+
+                total_uncompressed_bytes += file_info.file_size
+                if total_uncompressed_bytes > MAX_BATCH_EXTRACTED_BYTES:
+                    raise ValueError("ZIP 解压后的内容过大，请减少文件数量或压缩包体积。")
+
+                if file_info.file_size > MAX_SOURCE_FILE_BYTES:
+                    raise ValueError(f"压缩包内文件过大：{normalized_path.name} 超过 1MB。")
+
+                if not is_supported_source_file(normalized_path):
+                    continue
+
+                content = decode_text_content(archive.read(file_info))
+                source_entries.append((normalized_path, content))
+    except zipfile.BadZipFile as error:
+        raise ValueError("上传的 ZIP 压缩包无效。") from error
+
+    if not source_entries:
+        raise ValueError("ZIP 压缩包中没有找到可批改的源代码文件。")
+
+    if len(source_entries) > MAX_ARCHIVE_SOURCE_FILES:
+        raise ValueError("ZIP 中的源代码文件数量过多，请控制在 500 个以内。")
+
+    normalized_paths = strip_common_archive_root([path for path, _ in source_entries])
+    grouped_files: Dict[str, list[SubmissionFile]] = {}
+    for (_, content), normalized_path in zip(source_entries, normalized_paths):
+        if len(normalized_path.parts) > 1:
+            group_name = normalized_path.parts[0]
+            relative_path = PurePosixPath(*normalized_path.parts[1:])
+        else:
+            group_name = normalized_path.name
+            relative_path = normalized_path
+
+        grouped_files.setdefault(group_name, []).append(
+            SubmissionFile(relative_path=str(relative_path), content=content)
+        )
+
+    if len(grouped_files) > MAX_BATCH_SUBMISSIONS:
+        raise ValueError("批量批改的提交数量过多，请控制在 200 份以内。")
+
+    submissions = []
+    for display_name in sorted(grouped_files):
+        files = sorted(grouped_files[display_name], key=lambda item: item.relative_path)
+        submissions.append(
+            SubmissionPackage(
+                identifier=sanitize_submission_identifier(display_name),
+                display_name=display_name,
+                files=files,
+            )
+        )
+    return submissions
+
+
+def extract_review_metadata(review_text: str) -> tuple[Optional[float], str, str]:
+    metadata: Dict[str, str] = {}
+    for key, value in MACHINE_TAG_PATTERN.findall(review_text):
+        metadata[key] = value.strip()
+
+    cleaned = MACHINE_TAG_PATTERN.sub("", review_text).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    confidence = metadata.get("CONFIDENCE", "")
+
+    score: Optional[float] = None
+    raw_score = metadata.get("FINAL_SCORE", "")
+    if raw_score:
+        match = re.search(r"[0-9]{1,3}(?:\.\d+)?", raw_score)
+        if match:
+            score = max(0.0, min(100.0, float(match.group(0))))
+
+    if score is None:
+        fallback = FALLBACK_SCORE_PATTERN.search(cleaned)
+        if fallback:
+            score = max(0.0, min(100.0, float(fallback.group(1))))
+
+    return score, confidence, cleaned
+
+
+def grade_submission(
+    submission: SubmissionPackage,
+    fields: Dict[str, str],
+    test_cases: list[dict],
+    compare_mode: str,
+    system_prompt: str,
+) -> dict:
+    code_text = format_submission_code(submission.files)
+    if not code_text.strip():
+        raise ValueError("提交内容为空。")
+
+    test_results = None
+    test_results_text = ""
+    if test_cases:
+        suite = code_runner.run_submission_test_cases(
+            [{"path": file.relative_path, "content": file.content} for file in submission.files],
+            fields["programming_language"],
+            test_cases,
+            compare_mode=compare_mode,
+        )
+        test_results = suite.to_dict()
+        test_results["compare_mode"] = compare_mode
+        test_results_text = format_test_results_for_prompt(test_results)
+
+    user_prompt = build_user_prompt(
+        fields,
+        build_submission_summary(submission),
+        code_text,
+        test_results_text,
+    )
+    raw_review = call_openai_compatible_api(system_prompt, user_prompt)
+    score, confidence, review_text = extract_review_metadata(raw_review)
+
+    result = {
+        "ok": True,
+        "submission_id": submission.identifier,
+        "submission_name": submission.display_name,
+        "file_count": len(submission.files),
+        "files": [file.relative_path for file in submission.files],
+        "result": review_text,
+        "confidence": confidence,
+    }
+    if score is not None:
+        result["score"] = round(score, 2)
+    if test_results is not None:
+        result["test_results"] = test_results
+    return result
+
+
+def build_failed_submission_result(submission: SubmissionPackage, error: Exception) -> dict:
+    return {
+        "ok": False,
+        "submission_id": submission.identifier,
+        "submission_name": submission.display_name,
+        "file_count": len(submission.files),
+        "files": [file.relative_path for file in submission.files],
+        "error": str(error),
+    }
+
+
+def build_score_distribution(scores: list[float]) -> Dict[str, int]:
+    buckets = {
+        "90-100": 0,
+        "80-89": 0,
+        "70-79": 0,
+        "60-69": 0,
+        "0-59": 0,
+    }
+    for score in scores:
+        if score >= 90:
+            buckets["90-100"] += 1
+        elif score >= 80:
+            buckets["80-89"] += 1
+        elif score >= 70:
+            buckets["70-79"] += 1
+        elif score >= 60:
+            buckets["60-69"] += 1
+        else:
+            buckets["0-59"] += 1
+    return buckets
+
+
+def build_batch_summary(results: list[dict]) -> dict:
+    successful_results = [result for result in results if result.get("ok")]
+    scores = [
+        float(result["score"])
+        for result in successful_results
+        if isinstance(result.get("score"), (int, float))
+    ]
+    test_results = [result["test_results"] for result in successful_results if result.get("test_results")]
+
+    test_summary = None
+    if test_results:
+        total_cases = sum(result["total"] for result in test_results)
+        passed_cases = sum(result["passed"] for result in test_results)
+        test_summary = {
+            "students_with_tests": len(test_results),
+            "total_cases": total_cases,
+            "passed_cases": passed_cases,
+            "failed_cases": total_cases - passed_cases,
+            "full_pass_submissions": sum(
+                1 for result in test_results if result["total"] > 0 and result["passed"] == result["total"]
+            ),
+        }
+
+    summary = {
+        "total_submissions": len(results),
+        "successful_submissions": len(successful_results),
+        "failed_submissions": len(results) - len(successful_results),
+        "scored_submissions": len(scores),
+        "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "max_score": max(scores) if scores else None,
+        "min_score": min(scores) if scores else None,
+        "score_distribution": build_score_distribution(scores) if scores else {},
+    }
+    if test_summary is not None:
+        summary["test_summary"] = test_summary
+    return summary
+
+
+def safe_export_name(value: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._")
+    return cleaned or fallback
+
+
+def build_batch_export_report(result: dict) -> str:
+    lines = [f"# {result['submission_name']}", ""]
+    lines.append(f"状态：{'批改成功' if result.get('ok') else '批改失败'}")
+    lines.append(f"文件数：{result.get('file_count', 0)}")
+    lines.append(f"文件列表：{', '.join(result.get('files', [])) or '无'}")
+    if result.get("score") is not None:
+        lines.append(f"最终分数：{result['score']}")
+    if result.get("confidence"):
+        lines.append(f"置信度：{result['confidence']}")
+
+    test_results = result.get("test_results")
+    if isinstance(test_results, dict):
+        lines.append(
+            f"自动测试：{test_results.get('passed', 0)}/{test_results.get('total', 0)} 通过"
+        )
+
+    lines.append("")
+    if result.get("ok"):
+        lines.append(result.get("result", ""))
+    else:
+        lines.append(f"错误：{result.get('error', '未知错误')}")
+    lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def build_batch_export_bundle(
+    archive_name: str,
+    fields: Dict[str, str],
+    compare_mode: str,
+    results: list[dict],
+    summary: dict,
+) -> ExportBundle:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "submission_name",
+            "status",
+            "score",
+            "confidence",
+            "file_count",
+            "files",
+            "passed_tests",
+            "total_tests",
+            "error",
+        ]
+    )
+    for result in results:
+        test_results = result.get("test_results") or {}
+        writer.writerow(
+            [
+                result.get("submission_name", ""),
+                "success" if result.get("ok") else "failed",
+                result.get("score", ""),
+                result.get("confidence", ""),
+                result.get("file_count", 0),
+                " | ".join(result.get("files", [])),
+                test_results.get("passed", ""),
+                test_results.get("total", ""),
+                result.get("error", ""),
+            ]
+        )
+
+    package_manifest = {
+        "archive_name": archive_name,
+        "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "fields": fields,
+        "compare_mode": compare_mode,
+        "summary": summary,
+        "results": results,
+    }
+
+    archive_buffer = io.BytesIO()
+    archive_stem = Path(archive_name).stem or "batch_grading_results"
+    export_basename = f"{safe_export_name(archive_stem, 'batch_grading_results')}_grading_export"
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as export_zip:
+        export_zip.writestr("grading_results.csv", output.getvalue())
+        export_zip.writestr(
+            "statistics.json",
+            json.dumps(summary, ensure_ascii=False, indent=2),
+        )
+        export_zip.writestr(
+            "grading_results.json",
+            json.dumps(package_manifest, ensure_ascii=False, indent=2),
+        )
+        export_zip.writestr(
+            "README.txt",
+            "\n".join(
+                [
+                    "批量批改导出文件说明",
+                    "",
+                    "grading_results.csv  : 结果总表",
+                    "statistics.json     : 汇总统计信息",
+                    "grading_results.json: 完整导出数据",
+                    "reports/*.md        : 每位学生的批改报告",
+                ]
+            ),
+        )
+
+        for index, result in enumerate(results, start=1):
+            report_name = safe_export_name(
+                result.get("submission_name", ""),
+                f"submission_{index}",
+            )
+            export_zip.writestr(
+                f"reports/{index:03d}_{report_name}.md",
+                build_batch_export_report(result),
+            )
+
+    return ExportBundle(
+        filename=f"{export_basename}.zip",
+        content_type="application/zip",
+        content=archive_buffer.getvalue(),
+    )
+
+
+def store_export_bundle(bundle: ExportBundle) -> str:
+    token = secrets.token_urlsafe(24)
+    with EXPORT_CACHE_LOCK:
+        EXPORT_CACHE[token] = bundle
+        while len(EXPORT_CACHE) > EXPORT_CACHE_LIMIT:
+            oldest_token = next(iter(EXPORT_CACHE))
+            EXPORT_CACHE.pop(oldest_token, None)
+    return token
+
+
+def get_export_bundle(token: str) -> Optional[ExportBundle]:
+    with EXPORT_CACHE_LOCK:
+        return EXPORT_CACHE.get(token)
+
+
+def build_content_disposition(filename: str) -> str:
+    ascii_fallback = re.sub(r"[^a-zA-Z0-9._-]+", "_", filename).strip("._") or "download"
+    quoted_name = urllib.parse.quote(filename)
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quoted_name}"
 
 
 def call_openai_compatible_api(system_prompt: str, user_prompt: str) -> str:
@@ -412,15 +949,17 @@ class AppHandler(BaseHTTPRequestHandler):
         self.route_request(send_body=False)
 
     def route_request(self, send_body: bool) -> None:
-        if self.path == "/healthz":
+        request_path = urllib.parse.urlparse(self.path).path
+
+        if request_path == "/healthz":
             self.send_json(HTTPStatus.OK, {"ok": True, "status": "healthy"}, send_body=send_body)
             return
 
-        if self.path == "/logout":
+        if request_path == "/logout":
             self.clear_session_and_redirect("/")
             return
 
-        if self.path == "/":
+        if request_path == "/":
             if not self.is_authenticated():
                 self.serve_login_page(send_body=send_body)
                 return
@@ -431,8 +970,12 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path.startswith("/static/"):
-            relative_path = self.path.removeprefix("/static/")
+        if request_path.startswith("/exports/"):
+            self.handle_export_request(request_path, send_body=send_body)
+            return
+
+        if request_path.startswith("/static/"):
+            relative_path = request_path.removeprefix("/static/")
             file_path = STATIC_DIR / relative_path
             self.serve_static(file_path, send_body=send_body)
             return
@@ -440,11 +983,13 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
     def do_POST(self) -> None:
-        if self.path == "/login":
+        request_path = urllib.parse.urlparse(self.path).path
+
+        if request_path == "/login":
             self.handle_login_request()
             return
 
-        if self.path != "/grade":
+        if request_path != "/grade":
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
             return
 
@@ -475,61 +1020,66 @@ class AppHandler(BaseHTTPRequestHandler):
         if not upload.filename:
             raise ValueError("上传文件缺少文件名。")
 
-        file_bytes = upload.content
-        if len(file_bytes) > MAX_UPLOAD_BYTES:
-            raise ValueError("上传文件过大，请控制在 1MB 以内。")
-
-        try:
-            code_text = file_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            code_text = file_bytes.decode("utf-8", errors="replace")
-
-        if not code_text.strip():
-            raise ValueError("上传的代码文件内容为空。")
-
-        fields = {
-            "mode": self._get_field_value(form.fields, "mode", "Teacher"),
-            "assignment_title": self._get_field_value(form.fields, "assignment_title"),
-            "assignment_requirements": self._get_field_value(form.fields, "assignment_requirements"),
-            "task_goal": self._get_field_value(form.fields, "task_goal"),
-            "programming_language": self._get_field_value(form.fields, "programming_language"),
-            "rubric": self._get_field_value(form.fields, "rubric"),
-        }
-
-        # Run automated tests if test cases are provided
-        test_results = None
-        test_results_text = ""
-        compare_mode = self._get_field_value(form.fields, "compare_mode", "strict").strip() or "strict"
-        raw_cases = form.fields.get("test_cases", "").strip()
-        if raw_cases:
-            try:
-                test_cases = json.loads(raw_cases)
-                test_cases = [
-                    tc for tc in test_cases
-                    if isinstance(tc, dict) and ("input" in tc or "expected_output" in tc)
-                ]
-                for tc in test_cases:
-                    tc.setdefault("input", "")
-                    tc.setdefault("expected_output", "")
-                if test_cases:
-                    suite = code_runner.run_test_cases(
-                        code_text, upload.filename,
-                        fields["programming_language"], test_cases,
-                        compare_mode=compare_mode,
-                    )
-                    test_results = suite.to_dict()
-                    test_results["compare_mode"] = compare_mode
-                    test_results_text = format_test_results_for_prompt(test_results)
-            except (json.JSONDecodeError, TypeError):
-                pass  # Malformed test cases — fall back to AI-only review
-
+        fields = build_grading_fields(form.fields)
+        compare_mode = normalize_compare_mode(self._get_field_value(form.fields, "compare_mode", "strict"))
+        test_cases = parse_test_cases(form.fields.get("test_cases", ""))
         system_prompt = read_skill_prompt()
-        user_prompt = build_user_prompt(fields, upload.filename, code_text, test_results_text)
-        ai_result = call_openai_compatible_api(system_prompt, user_prompt)
 
-        response = {"ok": True, "result": ai_result}
-        if test_results is not None:
-            response["test_results"] = test_results
+        if upload.filename.lower().endswith(".zip"):
+            submissions = build_batch_submissions(upload)
+            results = []
+            for submission in submissions:
+                try:
+                    results.append(
+                        grade_submission(
+                            submission=submission,
+                            fields=fields,
+                            test_cases=test_cases,
+                            compare_mode=compare_mode,
+                            system_prompt=system_prompt,
+                        )
+                    )
+                except Exception as error:
+                    results.append(build_failed_submission_result(submission, error))
+
+            summary = build_batch_summary(results)
+            bundle = build_batch_export_bundle(
+                archive_name=upload.filename,
+                fields=fields,
+                compare_mode=compare_mode,
+                results=results,
+                summary=summary,
+            )
+            export_token = store_export_bundle(bundle)
+            return {
+                "ok": True,
+                "mode": "batch",
+                "archive_name": upload.filename,
+                "summary": summary,
+                "results": results,
+                "export_url": f"/exports/{export_token}",
+                "export_filename": bundle.filename,
+            }
+
+        submission = build_single_submission(upload)
+        graded = grade_submission(
+            submission=submission,
+            fields=fields,
+            test_cases=test_cases,
+            compare_mode=compare_mode,
+            system_prompt=system_prompt,
+        )
+        response = {
+            "ok": True,
+            "mode": "single",
+            "result": graded["result"],
+        }
+        if graded.get("score") is not None:
+            response["score"] = graded["score"]
+        if graded.get("confidence"):
+            response["confidence"] = graded["confidence"]
+        if graded.get("test_results") is not None:
+            response["test_results"] = graded["test_results"]
         return response
 
     def handle_login_request(self) -> None:
@@ -554,6 +1104,29 @@ class AppHandler(BaseHTTPRequestHandler):
 
         token = create_session_token(invite_code)
         self.redirect("/", extra_headers={"Set-Cookie": self.build_session_cookie(token)})
+
+    def handle_export_request(self, request_path: str, send_body: bool = True) -> None:
+        if not self.is_authenticated():
+            self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+            return
+
+        token = request_path.removeprefix("/exports/").strip("/")
+        if not token:
+            self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+            return
+
+        bundle = get_export_bundle(token)
+        if bundle is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "Export Not Found")
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", bundle.content_type)
+        self.send_header("Content-Disposition", build_content_disposition(bundle.filename))
+        self.send_header("Content-Length", str(len(bundle.content)))
+        self.end_headers()
+        if send_body:
+            self.wfile.write(bundle.content)
 
     def _get_field_value(self, fields: Dict[str, str], name: str, default: str = "") -> str:
         return str(fields.get(name, default))
@@ -653,7 +1226,7 @@ class AppHandler(BaseHTTPRequestHandler):
         mime_type, _ = mimetypes.guess_type(file_path.name)
         self.serve_file(file_path, mime_type or "application/octet-stream", send_body=send_body)
 
-    def send_json(self, status: int, payload: Dict[str, str], send_body: bool = True) -> None:
+    def send_json(self, status: int, payload: Dict, send_body: bool = True) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
